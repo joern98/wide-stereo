@@ -2,10 +2,13 @@ import cv2 as cv
 import numpy as np
 import pyrealsense2 as rs
 from device_utility.DeviceManager import DeviceManager
+from matplotlib import pyplot as plt
+from scipy.interpolate import interp1d
 
 # GLOBALS
-WINDOW_NAME = "wide stereo"
-
+WINDOW_IR_L = "infrared left"
+WINDOW_IR_R = "infrared right"
+WINDOW_DEPTH = "depth"
 
 stereo_algorithm = cv.StereoSGBM.create(
     minDisparity=16,
@@ -72,17 +75,33 @@ def main():
 
     wide_stereo_baseline = 3 * left_baseline
 
-    cv.namedWindow(WINDOW_NAME)
+    cv.namedWindow(WINDOW_IR_L)
+    cv.namedWindow(WINDOW_IR_R)
+    cv.namedWindow(WINDOW_DEPTH)
+
+    map_range = interp1d([0, 10], [0, 255])
+    map_depth_to_uint8 = lambda d: map_range(d).astype(np.uint8)
+
+    stream_width = device_pair.left.pipeline_profile.get_stream(rs.stream.infrared, 1).as_video_stream_profile().width()
+    stream_height = device_pair.left.pipeline_profile.get_stream(rs.stream.infrared,
+                                                                 1).as_video_stream_profile().height()
 
     run = True
     while run:
         left_frame, right_frame = device_pair.wait_for_frames()
-        cv.imshow(WINDOW_NAME, np.asanyarray(left_frame.get_infrared_frame(1).get_data()))
+        cv.imshow(WINDOW_IR_L, np.asanyarray(left_frame.get_infrared_frame(1).get_data()))
+        cv.imshow(WINDOW_IR_R, np.asanyarray(right_frame.get_infrared_frame(2).get_data()))
+        depth = wide_stereo_from_frames(left_frame, right_frame, wide_stereo_baseline, left_intrinsic.fx)
+        depth_colormapped = cv.applyColorMap(map_depth_to_uint8(depth), cv.COLORMAP_JET)
+        depth_in_center = depth[stream_width // 2, stream_height // 2]
+        cv.putText(depth_colormapped, f"{depth_in_center:.3} m", [40, 40], fontFace=cv.FONT_HERSHEY_PLAIN,
+                   fontScale=1.1, color=[0, 0, 0], thickness=2)
+        cv.imshow(WINDOW_DEPTH, depth_colormapped)
 
         if cv.waitKey(1) == 27:
             run = False
 
-    cv.destroyWindow(WINDOW_NAME)
+    cv.destroyAllWindows()
     print("Waiting for device pipelines to close...")
     device_pair.stop()
 
