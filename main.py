@@ -13,9 +13,9 @@ WINDOW_DEPTH = "depth"
 MOUSE_X, MOUSE_Y = 0, 0
 
 stereo_algorithm = cv.StereoSGBM.create(
-    minDisparity=16,
-    numDisparities=96,
-    blockSize=11,
+    minDisparity=6,  # 20m
+    numDisparities=48,  # ~3m
+    blockSize=5,
     P1=8 * 3 * 3 ** 2,
     P2=31 * 3 * 3 ** 2,
     disp12MaxDiff=0,
@@ -53,6 +53,9 @@ def get_stereo_extrinsic(profile: rs.pipeline_profile) -> rs.extrinsics:
     e = ir0_profile.get_extrinsics_to(ir1_profile)
     return e
 
+
+# TODO turn of auto exposure and set both the same ->
+#  better would be just having the left camera control exposure time and writing left params to right camera
 def set_device_options(device_pair: DevicePair):
     depth_sensor_left: rs.depth_sensor = device_pair.left.pipeline_profile.get_device().first_depth_sensor()
     depth_sensor_right: rs.depth_sensor = device_pair.right.pipeline_profile.get_device().first_depth_sensor()
@@ -62,6 +65,7 @@ def set_device_options(device_pair: DevicePair):
     if depth_sensor_left.supports(rs.option.emitter_always_on):
         depth_sensor_left.set_option(rs.option.emitter_always_on, True)
         depth_sensor_right.set_option(rs.option.emitter_always_on, True)
+
 
 def on_mouse(event, x, y, flags, user_data):
     global MOUSE_X, MOUSE_Y
@@ -94,12 +98,16 @@ def main():
 
     wide_stereo_baseline = 3 * left_baseline
 
+    print(f"baseline: {wide_stereo_baseline} m ")
+    print(f"left cam fx: {left_intrinsic.fx}")
+    print(f"left cam fy: {left_intrinsic.fy}")
+
     cv.namedWindow(WINDOW_IR_L)
     cv.namedWindow(WINDOW_IR_R)
     cv.namedWindow(WINDOW_DEPTH)
     cv.setMouseCallback(WINDOW_DEPTH, on_mouse)
 
-    map_range = interp1d([0, 10], [0, 255])
+    map_range = interp1d([0, 10], [0, 255], bounds_error=False, fill_value=(0, 255))
     map_depth_to_uint8 = lambda d: map_range(d).astype(np.uint8)
 
     stream_width = device_pair.left.pipeline_profile.get_stream(rs.stream.infrared, 1).as_video_stream_profile().width()
