@@ -85,6 +85,7 @@ def main():
     stream_width = device_pair.left.pipeline_profile.get_stream(rs.stream.infrared, 1).as_video_stream_profile().width()
     stream_height = device_pair.left.pipeline_profile.get_stream(rs.stream.infrared,
                                                                  1).as_video_stream_profile().height()
+    stream_center = [stream_width // 2, stream_height // 2]
 
     run = True
     while run:
@@ -93,7 +94,8 @@ def main():
         cv.imshow(WINDOW_IR_R, np.asanyarray(right_frame.get_infrared_frame(2).get_data()))
         depth = wide_stereo_from_frames(left_frame, right_frame, wide_stereo_baseline, left_intrinsic.fx)
         depth_colormapped = cv.applyColorMap(map_depth_to_uint8(depth), cv.COLORMAP_JET)
-        depth_in_center = depth[stream_width // 2, stream_height // 2]
+        depth_in_center = depth[stream_center[0], stream_center[1]]
+        cv.drawMarker(depth_colormapped, stream_center, [0, 0, 0], cv.MARKER_SQUARE, markerSize=8, thickness=2)
         cv.putText(depth_colormapped, f"{depth_in_center:.3} m", [40, 40], fontFace=cv.FONT_HERSHEY_PLAIN,
                    fontScale=1.1, color=[0, 0, 0], thickness=2)
         cv.imshow(WINDOW_DEPTH, depth_colormapped)
