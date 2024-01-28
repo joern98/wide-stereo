@@ -2,7 +2,6 @@ import cv2 as cv
 import numpy as np
 import pyrealsense2 as rs
 from device_utility.DeviceManager import DeviceManager, DevicePair
-from matplotlib import pyplot as plt
 from scipy.interpolate import interp1d
 
 # GLOBALS
@@ -13,18 +12,48 @@ WINDOW_DEPTH = "depth"
 MOUSE_X, MOUSE_Y = 0, 0
 
 stereo_algorithm = cv.StereoSGBM.create(
-    minDisparity=6,  # 20m
-    numDisparities=48,  # ~3m
+    minDisparity=6,  # ~20m
+    numDisparities=64,  # ~2.5m, 3*16
     blockSize=5,
     P1=8 * 3 * 3 ** 2,
     P2=31 * 3 * 3 ** 2,
     disp12MaxDiff=0,
     preFilterCap=0,
     uniquenessRatio=0,
-    speckleWindowSize=64,
-    speckleRange=1,
+    speckleWindowSize=0,
+    speckleRange=0,
     mode=cv.STEREO_SGBM_MODE_SGBM
 )
+
+
+def change_blockSize(value):
+    # odd_value = value if value % 2 == 1 else value+1  # ensure block size odd
+    odd_value = value
+    stereo_algorithm.setBlockSize(odd_value)
+    cv.setTrackbarPos("blockSize", WINDOW_DEPTH, odd_value)
+
+def change_P1(value):
+    p2 = stereo_algorithm.getP2()
+    stereo_algorithm.setP1(min(p2-1, value))
+
+def change_P2(value):
+    p1 = stereo_algorithm.getP1()
+    stereo_algorithm.setP2(max(value, p1+1))  # ensure P1 < P2
+
+def change_disp12MaxDiff(value):
+    stereo_algorithm.setDisp12MaxDiff(value)
+
+def change_preFilterCap(value):
+    stereo_algorithm.setPreFilterCap(value)
+
+def change_uniquenessRatio(value):
+    stereo_algorithm.setUniquenessRatio(value)
+
+def change_speckleWindowSize(value):
+    stereo_algorithm.setSpeckleWindowSize(value)
+
+def change_speckleRange(value):
+    stereo_algorithm.setSpeckleRange(value)
 
 
 def calculate_wide_stereo_depth(left: np.ndarray, right: np.ndarray, baseline, focal_length):
@@ -106,6 +135,14 @@ def main():
     cv.namedWindow(WINDOW_IR_R)
     cv.namedWindow(WINDOW_DEPTH)
     cv.setMouseCallback(WINDOW_DEPTH, on_mouse)
+    cv.createTrackbar("blockSize", WINDOW_DEPTH, stereo_algorithm.getBlockSize(), 15, change_blockSize)
+    cv.createTrackbar("p1", WINDOW_DEPTH, stereo_algorithm.getP1(), 1000, change_P1)
+    cv.createTrackbar("p2", WINDOW_DEPTH, stereo_algorithm.getP2(), 1000, change_P2)
+    cv.createTrackbar("disp12MaxDiff", WINDOW_DEPTH, stereo_algorithm.getDisp12MaxDiff(), 16, change_disp12MaxDiff)
+    cv.createTrackbar("preFilterCap", WINDOW_DEPTH, stereo_algorithm.getPreFilterCap(), 16, change_preFilterCap)
+    cv.createTrackbar("uniquenessRatio", WINDOW_DEPTH, stereo_algorithm.getUniquenessRatio(), 16, change_uniquenessRatio)
+    cv.createTrackbar("speckleWindowSize", WINDOW_DEPTH, stereo_algorithm.getSpeckleWindowSize(), 200, change_speckleWindowSize)
+    cv.createTrackbar("speckleRange", WINDOW_DEPTH, stereo_algorithm.getSpeckleRange(), 3, change_speckleRange)
 
     map_range = interp1d([0, 10], [0, 255], bounds_error=False, fill_value=(0, 255))
     map_depth_to_uint8 = lambda d: map_range(d).astype(np.uint8)
