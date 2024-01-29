@@ -173,9 +173,9 @@ def main():
         depth = wide_stereo_from_frames(left_frame, right_frame, wide_stereo_baseline, left_intrinsic.fx)
         depth_colormapped = cv.applyColorMap(map_depth_to_uint8(depth), cv.COLORMAP_JET)
         depth_at_cursor = depth[MOUSE_Y, MOUSE_X]
-        cv.drawMarker(depth_colormapped, stream_center, [0, 0, 0], cv.MARKER_SQUARE, markerSize=8, thickness=2)
+
         cv.putText(depth_colormapped, f"{depth_at_cursor:.3} m", [40, 40], fontFace=cv.FONT_HERSHEY_PLAIN,
-                   fontScale=1.1, color=[0, 0, 0], thickness=2)
+                   fontScale=1, color=[0, 0, 0], thickness=1)
         cv.imshow(WINDOW_DEPTH, depth_colormapped)
 
         key = cv.pollKey()
@@ -184,8 +184,10 @@ def main():
         if key == 27:  # ESCAPE
             run = False
 
-        if key == 115:  # s-
-            filename = f"Screenshot_{datetime.datetime.now().strftime('%y-%m-%d_%H-%M-%S')}.png"
+        if key == 115:  # s
+            filename = f"Screenshot_{datetime.datetime.now().strftime('%y-%m-%d_%H-%M-%S-%f')}.png"
+            # add marker at mouse position to the saved image
+            cv.drawMarker(depth_colormapped, [MOUSE_X, MOUSE_Y], [0, 0, 0], cv.MARKER_SQUARE, markerSize=6, thickness=1)
             cv.imwrite(filename, depth_colormapped)
             print(f"Screenshot saved as {filename}")
 
