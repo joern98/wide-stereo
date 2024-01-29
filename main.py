@@ -1,3 +1,6 @@
+import time
+import datetime
+
 import cv2 as cv
 import numpy as np
 import pyrealsense2 as rs
@@ -11,17 +14,18 @@ WINDOW_DEPTH = "depth"
 
 MOUSE_X, MOUSE_Y = 0, 0
 
+# TODO test StereoBM just for completeness
 stereo_algorithm = cv.StereoSGBM.create(
     minDisparity=6,  # ~20m
-    numDisparities=64,  # ~2.5m, 3*16
+    numDisparities=96,  # 48~>2.5m, 64~>1.9m, 80~>1.5m, 96~>1.26m
     blockSize=5,
     P1=8 * 3 * 3 ** 2,
     P2=31 * 3 * 3 ** 2,
-    disp12MaxDiff=0,
+    disp12MaxDiff=-1,
     preFilterCap=0,
-    uniquenessRatio=0,
-    speckleWindowSize=0,
-    speckleRange=0,
+    uniquenessRatio=8,
+    speckleWindowSize=100,
+    speckleRange=1,
     mode=cv.STEREO_SGBM_MODE_SGBM
 )
 
@@ -32,25 +36,32 @@ def change_blockSize(value):
     stereo_algorithm.setBlockSize(odd_value)
     cv.setTrackbarPos("blockSize", WINDOW_DEPTH, odd_value)
 
+
 def change_P1(value):
     p2 = stereo_algorithm.getP2()
-    stereo_algorithm.setP1(min(p2-1, value))
+    stereo_algorithm.setP1(min(p2 - 1, value))
+
 
 def change_P2(value):
     p1 = stereo_algorithm.getP1()
-    stereo_algorithm.setP2(max(value, p1+1))  # ensure P1 < P2
+    stereo_algorithm.setP2(max(value, p1 + 1))  # ensure P1 < P2
+
 
 def change_disp12MaxDiff(value):
     stereo_algorithm.setDisp12MaxDiff(value)
 
+
 def change_preFilterCap(value):
     stereo_algorithm.setPreFilterCap(value)
+
 
 def change_uniquenessRatio(value):
     stereo_algorithm.setUniquenessRatio(value)
 
+
 def change_speckleWindowSize(value):
     stereo_algorithm.setSpeckleWindowSize(value)
+
 
 def change_speckleRange(value):
     stereo_algorithm.setSpeckleRange(value)
@@ -61,9 +72,9 @@ def calculate_wide_stereo_depth(left: np.ndarray, right: np.ndarray, baseline, f
     # omit rectification for now
     disp = stereo_algorithm.compute(left, right).astype(np.float32) / 16.0
 
-    # TODO disp to depth using formula d=fb/z <=> z=fb/d
+    # disp to depth using formula d=fb/z <=> z=fb/d
     fb = focal_length * abs(baseline)
-    depth = fb * 1 / disp
+    depth = fb / disp
     return depth
 
 
@@ -127,9 +138,7 @@ def main():
 
     wide_stereo_baseline = 3 * left_baseline
 
-    print(f"baseline: {wide_stereo_baseline} m ")
-    print(f"left cam fx: {left_intrinsic.fx}")
-    print(f"left cam fy: {left_intrinsic.fy}")
+    print(f" Left camera intrinsic parameters: {left_intrinsic}")
 
     cv.namedWindow(WINDOW_IR_L)
     cv.namedWindow(WINDOW_IR_R)
@@ -140,11 +149,14 @@ def main():
     cv.createTrackbar("p2", WINDOW_DEPTH, stereo_algorithm.getP2(), 1000, change_P2)
     cv.createTrackbar("disp12MaxDiff", WINDOW_DEPTH, stereo_algorithm.getDisp12MaxDiff(), 16, change_disp12MaxDiff)
     cv.createTrackbar("preFilterCap", WINDOW_DEPTH, stereo_algorithm.getPreFilterCap(), 16, change_preFilterCap)
-    cv.createTrackbar("uniquenessRatio", WINDOW_DEPTH, stereo_algorithm.getUniquenessRatio(), 16, change_uniquenessRatio)
-    cv.createTrackbar("speckleWindowSize", WINDOW_DEPTH, stereo_algorithm.getSpeckleWindowSize(), 200, change_speckleWindowSize)
+    cv.createTrackbar("uniquenessRatio", WINDOW_DEPTH, stereo_algorithm.getUniquenessRatio(), 16,
+                      change_uniquenessRatio)
+    cv.createTrackbar("speckleWindowSize", WINDOW_DEPTH, stereo_algorithm.getSpeckleWindowSize(), 200,
+                      change_speckleWindowSize)
     cv.createTrackbar("speckleRange", WINDOW_DEPTH, stereo_algorithm.getSpeckleRange(), 3, change_speckleRange)
 
-    map_range = interp1d([0, 10], [0, 255], bounds_error=False, fill_value=(0, 255))
+    # assuming max depth of 12m here, needs adjustment depending on scene, maybe make it dynamic
+    map_range = interp1d([0, 12], [0, 255], bounds_error=False, fill_value=(0, 255))
     map_depth_to_uint8 = lambda d: map_range(d).astype(np.uint8)
 
     stream_width = device_pair.left.pipeline_profile.get_stream(rs.stream.infrared, 1).as_video_stream_profile().width()
@@ -154,6 +166,7 @@ def main():
 
     run = True
     while run:
+        # TODO Screenshots, all frames
         left_frame, right_frame = device_pair.wait_for_frames()
         cv.imshow(WINDOW_IR_L, np.asanyarray(left_frame.get_infrared_frame(1).get_data()))
         cv.imshow(WINDOW_IR_R, np.asanyarray(right_frame.get_infrared_frame(2).get_data()))
@@ -165,8 +178,16 @@ def main():
                    fontScale=1.1, color=[0, 0, 0], thickness=2)
         cv.imshow(WINDOW_DEPTH, depth_colormapped)
 
-        if cv.waitKey(1) == 27:
+        key = cv.pollKey()
+        if key != -1:
+            print(f"key code pressed: {key}")
+        if key == 27:  # ESCAPE
             run = False
+
+        if key == 115:  # s-
+            filename = f"Screenshot_{datetime.datetime.now().strftime('%y-%m-%d_%H-%M-%S')}.png"
+            cv.imwrite(filename, depth_colormapped)
+            print(f"Screenshot saved as {filename}")
 
     cv.destroyAllWindows()
     print("Waiting for device pipelines to close...")
