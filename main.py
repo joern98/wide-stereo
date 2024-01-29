@@ -1,3 +1,4 @@
+import threading
 import time
 import datetime
 
@@ -11,13 +12,14 @@ from scipy.interpolate import interp1d
 WINDOW_IR_L = "infrared left"
 WINDOW_IR_R = "infrared right"
 WINDOW_DEPTH = "depth"
+WINDOW_CONTROLS = "controls"
 
 MOUSE_X, MOUSE_Y = 0, 0
 
 # TODO test StereoBM just for completeness
 stereo_algorithm = cv.StereoSGBM.create(
-    minDisparity=6,  # ~20m
-    numDisparities=96,  # 48~>2.5m, 64~>1.9m, 80~>1.5m, 96~>1.26m
+    minDisparity=1,
+    numDisparities=16 * 6,
     blockSize=5,
     P1=8 * 3 * 3 ** 2,
     P2=31 * 3 * 3 ** 2,
@@ -30,11 +32,13 @@ stereo_algorithm = cv.StereoSGBM.create(
 )
 
 
+# based on https://learnopencv.com/depth-perception-using-stereo-camera-python-c/
+
 def change_blockSize(value):
     # odd_value = value if value % 2 == 1 else value+1  # ensure block size odd
     odd_value = value
     stereo_algorithm.setBlockSize(odd_value)
-    cv.setTrackbarPos("blockSize", WINDOW_DEPTH, odd_value)
+    cv.setTrackbarPos("blockSize", WINDOW_CONTROLS, odd_value)
 
 
 def change_P1(value):
@@ -67,6 +71,32 @@ def change_speckleRange(value):
     stereo_algorithm.setSpeckleRange(value)
 
 
+# device_pair passed as userdata
+def change_exposure_time(value, device_pair: DevicePair):
+    depth_sensor_left: rs.depth_sensor = device_pair.left.device.first_depth_sensor()
+    depth_sensor_right: rs.depth_sensor = device_pair.right.device.first_depth_sensor()
+    set_sensor_option(depth_sensor_left, rs.option.exposure, value)
+    set_sensor_option(depth_sensor_right, rs.option.exposure, value)
+
+
+def set_sensor_option(sensor: rs.sensor, option: rs.option, value) -> bool:
+    if sensor.supports(option):
+        sensor.set_option(option, value)
+        return True
+    else:
+        print(f"{sensor}, sn: {sensor.get_info(rs.camera_info.serial_number)} does not support option {option}!")
+        return False
+
+
+def get_sensor_option(sensor: rs.sensor, option: rs.option):
+    if sensor.supports(option):
+        value = sensor.get_option(option)
+        return value
+    else:
+        print(f"{sensor}, sn: {sensor.get_info(rs.camera_info.serial_number)} does not support option {option}!")
+        return None
+
+
 def calculate_wide_stereo_depth(left: np.ndarray, right: np.ndarray, baseline, focal_length):
     global stereo_algorithm
     # omit rectification for now
@@ -97,14 +127,19 @@ def get_stereo_extrinsic(profile: rs.pipeline_profile) -> rs.extrinsics:
 # TODO turn of auto exposure and set both the same ->
 #  better would be just having the left camera control exposure time and writing left params to right camera
 def set_device_options(device_pair: DevicePair):
-    depth_sensor_left: rs.depth_sensor = device_pair.left.pipeline_profile.get_device().first_depth_sensor()
-    depth_sensor_right: rs.depth_sensor = device_pair.right.pipeline_profile.get_device().first_depth_sensor()
+    depth_sensor_left: rs.depth_sensor = device_pair.left.device.first_depth_sensor()
+    depth_sensor_right: rs.depth_sensor = device_pair.right.device.first_depth_sensor()
+    left_supported = depth_sensor_left.get_supported_options()
     if depth_sensor_left.supports(rs.option.emitter_enabled):
         depth_sensor_left.set_option(rs.option.emitter_enabled, True)
         depth_sensor_right.set_option(rs.option.emitter_enabled, True)
     if depth_sensor_left.supports(rs.option.emitter_always_on):
         depth_sensor_left.set_option(rs.option.emitter_always_on, True)
         depth_sensor_right.set_option(rs.option.emitter_always_on, True)
+
+    # turn off auto exposure
+    set_sensor_option(depth_sensor_left, rs.option.enable_auto_exposure, 0)
+    set_sensor_option(depth_sensor_right, rs.option.enable_auto_exposure, 0)
 
 
 def on_mouse(event, x, y, flags, user_data):
@@ -122,9 +157,10 @@ def main():
         print("Serial selection failed: \n", e)
         return
 
-    device_pair = device_manager.enable_device_pair(left_serial, right_serial)
-
+    device_pair = device_manager.create_device_pair(left_serial, right_serial)
     set_device_options(device_pair)
+
+    device_pair.start(1280, 720, 15)
 
     left_intrinsic: rs.intrinsics = device_pair.left.pipeline_profile.get_stream(
         rs.stream.depth).as_video_stream_profile().get_intrinsics()
@@ -138,22 +174,33 @@ def main():
 
     wide_stereo_baseline = 3 * left_baseline
 
-    print(f" Left camera intrinsic parameters: {left_intrinsic}")
+    print(f"Left camera intrinsic parameters: {left_intrinsic}")
+    print(f"Wide stereo baseline: {abs(wide_stereo_baseline)} m")
 
     cv.namedWindow(WINDOW_IR_L)
     cv.namedWindow(WINDOW_IR_R)
     cv.namedWindow(WINDOW_DEPTH)
+    cv.namedWindow(WINDOW_CONTROLS)
+    cv.resizeWindow(WINDOW_CONTROLS, 600, 400)
+
     cv.setMouseCallback(WINDOW_DEPTH, on_mouse)
-    cv.createTrackbar("blockSize", WINDOW_DEPTH, stereo_algorithm.getBlockSize(), 15, change_blockSize)
-    cv.createTrackbar("p1", WINDOW_DEPTH, stereo_algorithm.getP1(), 1000, change_P1)
-    cv.createTrackbar("p2", WINDOW_DEPTH, stereo_algorithm.getP2(), 1000, change_P2)
-    cv.createTrackbar("disp12MaxDiff", WINDOW_DEPTH, stereo_algorithm.getDisp12MaxDiff(), 16, change_disp12MaxDiff)
-    cv.createTrackbar("preFilterCap", WINDOW_DEPTH, stereo_algorithm.getPreFilterCap(), 16, change_preFilterCap)
-    cv.createTrackbar("uniquenessRatio", WINDOW_DEPTH, stereo_algorithm.getUniquenessRatio(), 16,
+
+    cv.createTrackbar("blockSize", WINDOW_CONTROLS, stereo_algorithm.getBlockSize(), 15, change_blockSize)
+    cv.createTrackbar("p1", WINDOW_CONTROLS, stereo_algorithm.getP1(), 1000, change_P1)
+    cv.createTrackbar("p2", WINDOW_CONTROLS, stereo_algorithm.getP2(), 1000, change_P2)
+    cv.createTrackbar("disp12MaxDiff", WINDOW_CONTROLS, stereo_algorithm.getDisp12MaxDiff(), 16, change_disp12MaxDiff)
+    cv.createTrackbar("preFilterCap", WINDOW_CONTROLS, stereo_algorithm.getPreFilterCap(), 16, change_preFilterCap)
+    cv.createTrackbar("uniquenessRatio", WINDOW_CONTROLS, stereo_algorithm.getUniquenessRatio(), 16,
                       change_uniquenessRatio)
-    cv.createTrackbar("speckleWindowSize", WINDOW_DEPTH, stereo_algorithm.getSpeckleWindowSize(), 200,
+    cv.createTrackbar("speckleWindowSize", WINDOW_CONTROLS, stereo_algorithm.getSpeckleWindowSize(), 200,
                       change_speckleWindowSize)
-    cv.createTrackbar("speckleRange", WINDOW_DEPTH, stereo_algorithm.getSpeckleRange(), 3, change_speckleRange)
+    cv.createTrackbar("speckleRange", WINDOW_CONTROLS, stereo_algorithm.getSpeckleRange(), 3, change_speckleRange)
+
+    # exposure unit is microseconds -> [0, 166000] 166ms
+    cv.createTrackbar("exposure", WINDOW_CONTROLS, 0, 166000, lambda v: change_exposure_time(v, device_pair))
+    cv.setTrackbarPos("exposure", WINDOW_CONTROLS,
+                      int(get_sensor_option(device_pair.left.device.first_depth_sensor(), rs.option.exposure)))
+
 
     # assuming max depth of 12m here, needs adjustment depending on scene, maybe make it dynamic
     map_range = interp1d([0, 12], [0, 255], bounds_error=False, fill_value=(0, 255))
