@@ -146,6 +146,8 @@ def main():
 
     run_camera_calibration(device_pair)
 
+    return
+
     device_pair.start(1280, 720, 15)
 
     left_intrinsic: rs.intrinsics = device_pair.left.pipeline_profile.get_stream(

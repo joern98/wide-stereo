@@ -1,4 +1,5 @@
 import threading
+from dataclasses import dataclass
 
 import cv2 as cv
 import numpy as np
@@ -6,20 +7,38 @@ from device_utility.DevicePair import DevicePair
 from device_utility.utils import set_sensor_option
 import pyrealsense2 as rs
 
-NUM_PATTERNS_REQUIRED = 10
+NUM_PATTERNS_REQUIRED = 15
 # https://docs.opencv.org/4.x/d9/d5d/classcv_1_1TermCriteria.html, (TYPE, iterations, epsilon)
 TERM_CRITERIA = (cv.TERM_CRITERIA_COUNT + cv.TERM_CRITERIA_EPS, 30, 0.001)
 WINDOW_IMAGE_LEFT = "left ir"
 WINDOW_IMAGE_RIGHT = "right ir"
 
 
+@dataclass
+class CalibrationResult:
+    # return values: retval, cameraMatrix1, distCoeffs1, cameraMatrix2, distCoeffs2, R, T, E, F, perViewErrors
+    # tuple[float, UMat, UMat, UMat, UMat, UMat, UMat, UMat, UMat, UMat
+    retval: float
+    camera_matrix_left: cv.UMat
+    coeffs_left: cv.UMat
+    camera_matrix_right: cv.UMat
+    coeffs_right: cv.UMat
+    R: cv.UMat
+    T: cv.UMat
+    E: cv.UMat
+    F: cv.UMat
+    per_view_errors: cv.UMat
+
+
 def run_camera_calibration(device_pair: DevicePair):
     cv.namedWindow(WINDOW_IMAGE_RIGHT)
     cv.namedWindow(WINDOW_IMAGE_LEFT)
 
-    device_pair.start()
+    device_pair.start(fps=30)
     object_points, image_points_left, image_points_right = find_chessboard_corners(device_pair)
-    print(object_points, image_points_left, image_points_right)
+    print("chessboard corners found")
+    calibration_result = stereo_calibrate(device_pair, object_points, image_points_left, image_points_right)
+    print("calibration finished")
     device_pair.stop()
     cv.destroyAllWindows()
 
@@ -56,8 +75,20 @@ def find_chessboard_corners(device_pair: DevicePair):
     # get chessboard corners until required number of valid correspondences has been found
     while np.size(object_points, 0) < NUM_PATTERNS_REQUIRED:
         frame_left, frame_right = device_pair.wait_for_frames()
-        ir_left = frame_left.get_infrared_frame(1)
-        ir_right = frame_right.get_infrared_frame(2)
+
+        # check frame timestamps
+        ts_l = frame_left.get_timestamp()
+        ts_r = frame_right.get_timestamp()
+        d_ts = abs(ts_l - ts_r)
+        print(f"d ts: {d_ts}")
+
+        # outer cameras
+        # ir_left = frame_left.get_infrared_frame(1)
+        # ir_right = frame_right.get_infrared_frame(2)
+
+        # inner cameras
+        ir_left = frame_left.get_infrared_frame(2)
+        ir_right = frame_right.get_infrared_frame(1)
         image_left = np.array(ir_left.get_data())
         image_right = np.array(ir_right.get_data())
 
@@ -97,5 +128,48 @@ def find_chessboard_corners(device_pair: DevicePair):
     return object_points, image_points_left, image_points_right
 
 
-def stereo_calibrate(device_pair: DevicePair, object_points, image_points1, image_points2):
-    pass
+def rs_intrinsics_to_camera_matrix(intrinsics: rs.intrinsics) -> np.ndarray:
+    m = np.zeros((3, 3), np.float32)
+    m[0, 0] = intrinsics.fx
+    m[1, 1] = intrinsics.fy
+    m[2, 0] = intrinsics.ppx
+    m[2, 1] = intrinsics.ppy
+    m[2, 2] = 1
+    return m
+
+
+# https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html#ga9d2539c1ebcda647487a616bdf0fc716
+def stereo_calibrate(device_pair: DevicePair, object_points, image_points_left, image_points_right):
+    # inner cameras
+    left_intrinsic: rs.intrinsics = device_pair.left.pipeline_profile.get_stream(rs.stream.infrared, 2) \
+        .as_video_stream_profile().get_intrinsics()
+    right_intrinsic: rs.intrinsics = device_pair.right.pipeline_profile.get_stream(rs.stream.infrared, 1) \
+        .as_video_stream_profile().get_intrinsics()
+
+    left_camera_matrix = rs_intrinsics_to_camera_matrix(left_intrinsic)
+    right_camera_matrix = rs_intrinsics_to_camera_matrix(right_intrinsic)
+
+    left_coefficients = np.array(left_intrinsic.coeffs).astype(np.float32)
+    right_coefficients = np.array(right_intrinsic.coeffs).astype(np.float32)
+
+    # parameters: cv.stereoCalibrate(	objectPoints, imagePoints1, imagePoints2, cameraMatrix1, distCoeffs1, cameraMatrix2, distCoeffs2, imageSize,...)
+    # return values: retval, cameraMatrix1, distCoeffs1, cameraMatrix2, distCoeffs2, R, T, E, F, perViewErrors
+    per_view_errors = np.zeros(np.size(object_points, 0), np.float32)
+    r = np.zeros((3, 3), np.float32)
+    t = np.zeros((3, 1), np.float32)
+    result = cv.stereoCalibrate(objectPoints=object_points,
+                                imagePoints1=image_points_left,
+                                imagePoints2=image_points_right,
+                                cameraMatrix1=left_camera_matrix,
+                                distCoeffs1=left_coefficients,
+                                cameraMatrix2=right_camera_matrix,
+                                distCoeffs2=right_coefficients,
+                                imageSize=(left_intrinsic.width, left_intrinsic.height),
+                                R=r,
+                                T=t,
+                                perViewErrors=per_view_errors,
+                                flags=cv.CALIB_FIX_INTRINSIC)
+    calibration_result = CalibrationResult(*result)
+    print(calibration_result)
+    # TODO return sensible values
+    return calibration_result
