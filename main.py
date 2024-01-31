@@ -8,6 +8,8 @@ import pyrealsense2 as rs
 from device_utility.DeviceManager import DeviceManager, DevicePair
 from scipy.interpolate import interp1d
 
+from camera_calibration import run_camera_calibration
+
 # GLOBALS
 WINDOW_IR_L = "infrared left"
 WINDOW_IR_R = "infrared right"
@@ -160,6 +162,8 @@ def main():
     device_pair = device_manager.create_device_pair(left_serial, right_serial)
     set_device_options(device_pair)
 
+    run_camera_calibration(device_pair)
+
     device_pair.start(1280, 720, 15)
 
     left_intrinsic: rs.intrinsics = device_pair.left.pipeline_profile.get_stream(
@@ -201,7 +205,6 @@ def main():
     cv.setTrackbarPos("exposure", WINDOW_CONTROLS,
                       int(get_sensor_option(device_pair.left.device.first_depth_sensor(), rs.option.exposure)))
 
-
     # assuming max depth of 12m here, needs adjustment depending on scene, maybe make it dynamic
     map_range = interp1d([0, 12], [0, 255], bounds_error=False, fill_value=(0, 255))
     map_depth_to_uint8 = lambda d: map_range(d).astype(np.uint8)
@@ -212,6 +215,7 @@ def main():
     stream_center = [stream_width // 2, stream_height // 2]
 
     run = True
+    t0 = time.perf_counter_ns()
     while run:
         # TODO Screenshots, all frames
         left_frame, right_frame = device_pair.wait_for_frames()
@@ -219,9 +223,14 @@ def main():
         cv.imshow(WINDOW_IR_R, np.asanyarray(right_frame.get_infrared_frame(2).get_data()))
         depth = wide_stereo_from_frames(left_frame, right_frame, wide_stereo_baseline, left_intrinsic.fx)
         depth_colormapped = cv.applyColorMap(map_depth_to_uint8(depth), cv.COLORMAP_JET)
-        depth_at_cursor = depth[MOUSE_Y, MOUSE_X]
+        depth_at_cursor = depth[np.clip(MOUSE_Y, 0, 719), np.clip(MOUSE_X, 0, 1279)]
 
-        cv.putText(depth_colormapped, f"{depth_at_cursor:.3} m", [40, 40], fontFace=cv.FONT_HERSHEY_PLAIN,
+        cv.putText(depth_colormapped, f"{depth_at_cursor:.3} m", [10, 40], fontFace=cv.FONT_HERSHEY_PLAIN,
+                   fontScale=1, color=[0, 0, 0], thickness=1)
+        t1 = time.perf_counter_ns()
+        td = (t1 - t0) / 1000000
+        t0 = t1
+        cv.putText(depth_colormapped, f"{td:.6} ms, {1000 / td:.3} FPS", [10, 80], fontFace=cv.FONT_HERSHEY_PLAIN,
                    fontScale=1, color=[0, 0, 0], thickness=1)
         cv.imshow(WINDOW_DEPTH, depth_colormapped)
 
