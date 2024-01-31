@@ -1,4 +1,3 @@
-import threading
 import time
 import datetime
 
@@ -6,6 +5,7 @@ import cv2 as cv
 import numpy as np
 import pyrealsense2 as rs
 from device_utility.DeviceManager import DeviceManager, DevicePair
+from device_utility.utils import set_sensor_option, get_sensor_option
 from scipy.interpolate import interp1d
 
 from camera_calibration import run_camera_calibration
@@ -79,24 +79,6 @@ def change_exposure_time(value, device_pair: DevicePair):
     depth_sensor_right: rs.depth_sensor = device_pair.right.device.first_depth_sensor()
     set_sensor_option(depth_sensor_left, rs.option.exposure, value)
     set_sensor_option(depth_sensor_right, rs.option.exposure, value)
-
-
-def set_sensor_option(sensor: rs.sensor, option: rs.option, value) -> bool:
-    if sensor.supports(option):
-        sensor.set_option(option, value)
-        return True
-    else:
-        print(f"{sensor}, sn: {sensor.get_info(rs.camera_info.serial_number)} does not support option {option}!")
-        return False
-
-
-def get_sensor_option(sensor: rs.sensor, option: rs.option):
-    if sensor.supports(option):
-        value = sensor.get_option(option)
-        return value
-    else:
-        print(f"{sensor}, sn: {sensor.get_info(rs.camera_info.serial_number)} does not support option {option}!")
-        return None
 
 
 def calculate_wide_stereo_depth(left: np.ndarray, right: np.ndarray, baseline, focal_length):
