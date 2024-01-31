@@ -1,6 +1,10 @@
+import threading
+
 import cv2 as cv
 import numpy as np
 from device_utility.DevicePair import DevicePair
+from device_utility.utils import set_sensor_option
+import pyrealsense2 as rs
 
 NUM_PATTERNS_REQUIRED = 10
 # https://docs.opencv.org/4.x/d9/d5d/classcv_1_1TermCriteria.html, (TYPE, iterations, epsilon)
@@ -10,17 +14,26 @@ WINDOW_IMAGE_RIGHT = "right ir"
 
 
 def run_camera_calibration(device_pair: DevicePair):
+    cv.namedWindow(WINDOW_IMAGE_RIGHT)
+    cv.namedWindow(WINDOW_IMAGE_LEFT)
+
     device_pair.start()
     object_points, image_points_left, image_points_right = find_chessboard_corners(device_pair)
     print(object_points, image_points_left, image_points_right)
     device_pair.stop()
-    pass
+    cv.destroyAllWindows()
+
+    # TODO return transformation matrix rectification
+    return
 
 
 # https://docs.opencv.org/4.x/da/d0d/tutorial_camera_calibration_pattern.html
 def find_chessboard_corners(device_pair: DevicePair):
-
-    # TODO turn of ir pattern emitters
+    # turn of ir pattern emitters
+    depth_sensor_left: rs.depth_sensor = device_pair.left.device.first_depth_sensor()
+    depth_sensor_right: rs.depth_sensor = device_pair.right.device.first_depth_sensor()
+    set_sensor_option(depth_sensor_left, rs.option.emitter_enabled, False)
+    set_sensor_option(depth_sensor_right, rs.option.emitter_enabled, False)
 
     # Initialize array to hold the 3D-object coordinates of the inner chessboard corners
     # 8x8 chessboard has 7x7 inner corners
@@ -33,6 +46,12 @@ def find_chessboard_corners(device_pair: DevicePair):
     object_points = []
     image_points_left = []
     image_points_right = []
+
+    cooldown = False
+
+    def reset_cooldown():
+        nonlocal cooldown
+        cooldown = False
 
     # get chessboard corners until required number of valid correspondences has been found
     while np.size(object_points, 0) < NUM_PATTERNS_REQUIRED:
@@ -47,7 +66,7 @@ def find_chessboard_corners(device_pair: DevicePair):
         ret_r, corners_right = cv.findChessboardCorners(image_right, (7, 7), flags=cv.CALIB_CB_FAST_CHECK)
 
         # if both images had valid chessboard patterns found, refine them and append them to the output array
-        if ret_l and ret_r:
+        if ret_l and ret_r and not cooldown:
             object_points.append(objp)  # corresponding object points
 
             corners_subpixel_left = cv.cornerSubPix(image_left, corners_left, (5, 5), (-1, -1), TERM_CRITERIA)
@@ -56,16 +75,26 @@ def find_chessboard_corners(device_pair: DevicePair):
             image_points_left.append(corners_subpixel_left)
             image_points_right.append(corners_subpixel_right)
 
-            # show image for debugging purposes
+            # draw corners on images
             cv.drawChessboardCorners(image_left, (7, 7), corners_subpixel_left, ret_l)
-            cv.imshow(WINDOW_IMAGE, image_left)
-            cv.waitKey(0)
+            cv.drawChessboardCorners(image_right, (7, 7), corners_subpixel_right, ret_r)
 
-    # corners have been found
+            # set cooldown period
+            cooldown = True
+            threading.Timer(2, reset_cooldown).start()
+
+        # TODO refactor to use existing window infrastructure
+        cv.imshow(WINDOW_IMAGE_LEFT, image_left)
+        cv.imshow(WINDOW_IMAGE_RIGHT, image_right)
+        if cv.waitKey(1) == 27:  # ESCAPE
+            print(f"chessboard corner process aborted, found {np.size(object_points, 0)} sets of correspondences")
+            break
+
+    # turn emitters back on
+    set_sensor_option(depth_sensor_left, rs.option.emitter_enabled, True)
+    set_sensor_option(depth_sensor_right, rs.option.emitter_enabled, True)
+
     return object_points, image_points_left, image_points_right
-
-
-
 
 
 def stereo_calibrate(device_pair: DevicePair, object_points, image_points1, image_points2):
