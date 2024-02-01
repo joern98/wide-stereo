@@ -145,7 +145,6 @@ def main():
     set_device_options(device_pair)
 
     run_camera_calibration(device_pair)
-
     return
 
     device_pair.start(1280, 720, 15)

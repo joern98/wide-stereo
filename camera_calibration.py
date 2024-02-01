@@ -7,7 +7,7 @@ from device_utility.DevicePair import DevicePair
 from device_utility.utils import set_sensor_option
 import pyrealsense2 as rs
 
-NUM_PATTERNS_REQUIRED = 15
+NUM_PATTERNS_REQUIRED = 10
 # https://docs.opencv.org/4.x/d9/d5d/classcv_1_1TermCriteria.html, (TYPE, iterations, epsilon)
 TERM_CRITERIA = (cv.TERM_CRITERIA_COUNT + cv.TERM_CRITERIA_EPS, 30, 0.001)
 WINDOW_IMAGE_LEFT = "left ir"
@@ -56,11 +56,13 @@ def find_chessboard_corners(device_pair: DevicePair):
 
     # Initialize array to hold the 3D-object coordinates of the inner chessboard corners
     # 8x8 chessboard has 7x7 inner corners
-    objp = np.zeros((7 * 7, 3), np.float32)
+    # objp = np.zeros((7 * 7, 3), np.float32)
+    objp = np.zeros((5 * 7, 3), np.float32)
 
     # create coordinate pairs for the corners and write them to the array, leaving the z-coordinate at 0
     # chessboard pattern has a size of 24mm -> 0.024m
-    objp[:, :2] = np.mgrid[0:7 * 0.024:0.024, 0:7 * 0.024:0.024].T.reshape(-1, 2)
+    # objp[:, :2] = np.mgrid[0:7 * 0.024:0.024, 0:7 * 0.024:0.024].T.reshape(-1, 2)
+    objp[:, :2] = np.mgrid[0:5 * 0.034:0.034, 0:7 * 0.034:0.034].T.reshape(-1, 2)
 
     object_points = []
     image_points_left = []
@@ -93,22 +95,32 @@ def find_chessboard_corners(device_pair: DevicePair):
         image_right = np.array(ir_right.get_data())
 
         # find chessboard corners in both images. FAST_CHECK flag shortcuts the call if no chessboard is found
-        ret_l, corners_left = cv.findChessboardCorners(image_left, (7, 7), flags=cv.CALIB_CB_FAST_CHECK)
-        ret_r, corners_right = cv.findChessboardCorners(image_right, (7, 7), flags=cv.CALIB_CB_FAST_CHECK)
+        # ret_l, corners_left = cv.findChessboardCorners(image_left, (7, 7), flags=cv.CALIB_CB_FAST_CHECK)
+        # ret_r, corners_right = cv.findChessboardCorners(image_right, (7, 7), flags=cv.CALIB_CB_FAST_CHECK)
+
+        # https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html#gadc5bcb05cb21cf1e50963df26986d7c9
+        # use more robust method of detecting corners
+        ret_l, corners_left = cv.findChessboardCornersSB(image_left, (5, 7))
+        ret_r, corners_right = cv.findChessboardCornersSB(image_right, (5, 7))
 
         # if both images had valid chessboard patterns found, refine them and append them to the output array
         if ret_l and ret_r and not cooldown:
             object_points.append(objp)  # corresponding object points
 
-            corners_subpixel_left = cv.cornerSubPix(image_left, corners_left, (5, 5), (-1, -1), TERM_CRITERIA)
-            corners_subpixel_right = cv.cornerSubPix(image_right, corners_right, (5, 5), (-1, -1), TERM_CRITERIA)
+            # corners_subpixel_left = cv.cornerSubPix(image_left, corners_left, (5, 5), (-1, -1), TERM_CRITERIA)
+            # corners_subpixel_right = cv.cornerSubPix(image_right, corners_right, (5, 5), (-1, -1), TERM_CRITERIA)
 
-            image_points_left.append(corners_subpixel_left)
-            image_points_right.append(corners_subpixel_right)
+            # image_points_left.append(corners_subpixel_left)
+            # image_points_right.append(corners_subpixel_right)
+
+            image_points_left.append(corners_left)
+            image_points_right.append(corners_right)
 
             # draw corners on images
-            cv.drawChessboardCorners(image_left, (7, 7), corners_subpixel_left, ret_l)
-            cv.drawChessboardCorners(image_right, (7, 7), corners_subpixel_right, ret_r)
+            # cv.drawChessboardCorners(image_left, (7, 7), corners_subpixel_left, ret_l)
+            # cv.drawChessboardCorners(image_right, (7, 7), corners_subpixel_right, ret_r)
+            cv.drawChessboardCorners(image_left, (5, 7), corners_left, ret_l)
+            cv.drawChessboardCorners(image_right, (5, 7), corners_right, ret_r)
 
             # set cooldown period
             cooldown = True
@@ -132,8 +144,8 @@ def rs_intrinsics_to_camera_matrix(intrinsics: rs.intrinsics) -> np.ndarray:
     m = np.zeros((3, 3), np.float32)
     m[0, 0] = intrinsics.fx
     m[1, 1] = intrinsics.fy
-    m[2, 0] = intrinsics.ppx
-    m[2, 1] = intrinsics.ppy
+    m[0, 2] = intrinsics.ppx
+    m[1, 2] = intrinsics.ppy
     m[2, 2] = 1
     return m
 
