@@ -5,7 +5,7 @@ import cv2 as cv
 import numpy as np
 import pyrealsense2 as rs
 from device_utility.DeviceManager import DeviceManager, DevicePair
-from device_utility.utils import set_sensor_option, get_sensor_option
+from device_utility.utils import set_sensor_option, get_sensor_option, get_stereo_extrinsic
 from scipy.interpolate import interp1d
 
 from camera_calibration import run_camera_calibration
@@ -100,14 +100,6 @@ def wide_stereo_from_frames(left: rs.composite_frame, right: rs.composite_frame,
     return calculate_wide_stereo_depth(left_array, right_array, baseline, focal_length)
 
 
-def get_stereo_extrinsic(profile: rs.pipeline_profile) -> rs.extrinsics:
-    # https://dev.intelrealsense.com/docs/api-how-to#get-disparity-baseline
-    ir0_profile = profile.get_stream(rs.stream.infrared, 1).as_video_stream_profile()
-    ir1_profile = profile.get_stream(rs.stream.infrared, 2).as_video_stream_profile()
-    e = ir0_profile.get_extrinsics_to(ir1_profile)
-    return e
-
-
 # TODO turn of auto exposure and set both the same ->
 #  better would be just having the left camera control exposure time and writing left params to right camera
 def set_device_options(device_pair: DevicePair):
@@ -144,8 +136,7 @@ def main():
     device_pair = device_manager.create_device_pair(left_serial, right_serial)
     set_device_options(device_pair)
 
-    run_camera_calibration(device_pair)
-    return
+    calibration_result, rectification_result = run_camera_calibration(device_pair)
 
     device_pair.start(1280, 720, 15)
 
