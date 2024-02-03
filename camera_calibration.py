@@ -1,6 +1,7 @@
 import threading
 from dataclasses import dataclass
 from typing import Tuple, Sequence
+import pprint
 
 import cv2 as cv
 import numpy as np
@@ -87,7 +88,11 @@ def run_camera_calibration(device_pair: DevicePair) -> Tuple[CalibrationResult, 
     device_pair.stop()
     cv.destroyAllWindows()
 
-    # TODO return transformation matrix rectification
+    # TODO do not return calibration result as is, only return parameters for outer cameras
+    pprint.pp(camera_parameters)
+    pprint.pp(calibration_result)
+    pprint.pp(rectification_result)
+
     return calibration_result, rectification_result
 
 
@@ -246,8 +251,6 @@ def stereo_calibrate(device_pair: DevicePair, camera_params: CameraParameters, o
 
     # set R_14 if its outer pair
     calibration_result = CalibrationResult(*result, R_14=None)
-    print(calibration_result)
-    # TODO return sensible values
     return calibration_result
 
 
