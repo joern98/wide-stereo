@@ -1,7 +1,11 @@
 import threading
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, fields
+from datetime import datetime
+from json import JSONEncoder
 from typing import Tuple, Sequence
-import pprint
+
+import json
 
 import cv2 as cv
 import numpy as np
@@ -16,6 +20,7 @@ WINDOW_IMAGE_LEFT = "left ir"
 WINDOW_IMAGE_RIGHT = "right ir"
 
 
+# cv.UMat is np.ndarray internally
 @dataclass()
 class CalibrationResult:
     # return values: retval, cameraMatrix1, distCoeffs1, cameraMatrix2, distCoeffs2, R, T, E, F, perViewErrors
@@ -31,6 +36,7 @@ class CalibrationResult:
     F: np.ndarray
     per_view_errors: np.ndarray
     R_14: np.ndarray | None  # optional 4x4 transformation matrix from outer left to outer right
+    image_size: Tuple[int, int]
 
 
 @dataclass()
@@ -52,15 +58,15 @@ class CameraParameters:
 
 @dataclass()
 class RectificationResult:
-    left_map_x: cv.UMat
-    left_map_y: cv.UMat
-    right_map_x: cv.UMat
-    right_map_y: cv.UMat
-    R_left: cv.UMat
-    R_right: cv.UMat
-    P_left: cv.UMat
-    P_right: cv.UMat
-    Q: cv.UMat
+    left_map_x: np.ndarray
+    left_map_y: np.ndarray
+    right_map_x: np.ndarray
+    right_map_y: np.ndarray
+    R_left: np.ndarray
+    R_right: np.ndarray
+    P_left: np.ndarray
+    P_right: np.ndarray
+    Q: np.ndarray
     ROI_left: Sequence[int]
     ROI_right: Sequence[int]
 
@@ -69,7 +75,9 @@ def run_camera_calibration(device_pair: DevicePair) -> Tuple[CalibrationResult, 
     cv.namedWindow(WINDOW_IMAGE_RIGHT)
     cv.namedWindow(WINDOW_IMAGE_LEFT)
 
-    device_pair.start(fps=30)
+    # we only need IR streams
+    # try lower resolution to improve performance
+    device_pair.start(width=1280, height=720, fps=30, streams=(rs.stream.infrared,))
 
     # inner cameras
     camera_parameters = collect_camera_parameters(device_pair, 2, 1)
@@ -83,15 +91,14 @@ def run_camera_calibration(device_pair: DevicePair) -> Tuple[CalibrationResult, 
     calibration_result.R_14 = transform_inner_to_outer_stereo(camera_parameters, calibration_result)
     print(calibration_result.R_14)
 
-    rectification_result = stereo_rectify(device_pair, camera_parameters, calibration_result)
+    rectification_result = stereo_rectify(device_pair, camera_parameters.image_size, calibration_result)
 
     device_pair.stop()
     cv.destroyAllWindows()
 
     # TODO do not return calibration result as is, only return parameters for outer cameras
-    pprint.pp(camera_parameters)
-    pprint.pp(calibration_result)
-    pprint.pp(rectification_result)
+
+    write_calibration_to_file(calibration_result)
 
     return calibration_result, rectification_result
 
@@ -132,6 +139,10 @@ def find_chessboard_corners(device_pair: DevicePair):
     set_sensor_option(depth_sensor_left, rs.option.emitter_enabled, False)
     set_sensor_option(depth_sensor_right, rs.option.emitter_enabled, False)
 
+    # set exposure to below 33ms to allow for 30fps streaming
+    set_sensor_option(depth_sensor_left, rs.option.exposure, 30000)
+    set_sensor_option(depth_sensor_right, rs.option.exposure, 30000)
+
     # Initialize array to hold the 3D-object coordinates of the inner chessboard corners
     # 8x8 chessboard has 7x7 inner corners
     # objp = np.zeros((7 * 7, 3), np.float32)
@@ -152,8 +163,9 @@ def find_chessboard_corners(device_pair: DevicePair):
         nonlocal cooldown
         cooldown = False
 
+    t0 = time.perf_counter_ns()
     # get chessboard corners until required number of valid correspondences has been found
-    while np.size(object_points, 0) < NUM_PATTERNS_REQUIRED:
+    while np.size(object_points, 0) < NUM_PATTERNS_REQUIRED + 1:
         frame_left, frame_right = device_pair.wait_for_frames()
 
         # check frame timestamps
@@ -177,9 +189,9 @@ def find_chessboard_corners(device_pair: DevicePair):
         # ret_r, corners_right = cv.findChessboardCorners(image_right, (7, 7), flags=cv.CALIB_CB_FAST_CHECK)
 
         # https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html#gadc5bcb05cb21cf1e50963df26986d7c9
-        # use more robust method of detecting corners
-        ret_l, corners_left = cv.findChessboardCornersSB(image_left, (5, 7))
-        ret_r, corners_right = cv.findChessboardCornersSB(image_right, (5, 7))
+        # this is rather slow, maybe try multiprocessing or multithreading
+        ret_l, corners_left = cv.findChessboardCornersSB(image_left, (5, 7), flags=cv.CALIB_CB_MARKER)
+        ret_r, corners_right = cv.findChessboardCornersSB(image_right, (5, 7), flags=cv.CALIB_CB_MARKER)
 
         # if both images had valid chessboard patterns found, refine them and append them to the output array
         if ret_l and ret_r and not cooldown:
@@ -207,6 +219,11 @@ def find_chessboard_corners(device_pair: DevicePair):
         # TODO refactor to use existing window infrastructure
         cv.imshow(WINDOW_IMAGE_LEFT, image_left)
         cv.imshow(WINDOW_IMAGE_RIGHT, image_right)
+
+        t1 = time.perf_counter_ns()
+        td = t1 - t0
+        t0 = t1
+        print(f"td: {td / 1000000:0.4} ms")
         if cv.waitKey(1) == 27:  # ESCAPE
             print(f"chessboard corner process aborted, found {np.size(object_points, 0)} sets of correspondences")
             break
@@ -214,6 +231,11 @@ def find_chessboard_corners(device_pair: DevicePair):
     # turn emitters back on
     set_sensor_option(depth_sensor_left, rs.option.emitter_enabled, True)
     set_sensor_option(depth_sensor_right, rs.option.emitter_enabled, True)
+
+    # discard first match, it is usually bad due to motion blur
+    object_points.pop(0)
+    image_points_left.pop(0)
+    image_points_right.pop(0)
 
     return object_points, image_points_left, image_points_right
 
@@ -250,7 +272,9 @@ def stereo_calibrate(device_pair: DevicePair, camera_params: CameraParameters, o
                                 flags=cv.CALIB_FIX_INTRINSIC)
 
     # set R_14 if its outer pair
-    calibration_result = CalibrationResult(*result, R_14=None)
+    calibration_result = CalibrationResult(*result, R_14=None, image_size=camera_params.image_size)
+    print(f"stereo calibration retval: {calibration_result.retval}")
+    print(f"stereo calibration per view errors: \n{calibration_result.per_view_errors}")
     return calibration_result
 
 
@@ -286,7 +310,7 @@ def transform_inner_to_outer_stereo(camera_params: CameraParameters, calib: Cali
 
 # Reference: https://learnopencv.com/making-a-low-cost-stereo-camera-using-opencv/#stereo-rectification
 # https://docs.opencv.org/3.4/da/d54/group__imgproc__transform.html#gab75ef31ce5cdfb5c44b6da5f3b908ea4
-def stereo_rectify(device_pair: DevicePair, camera_params: CameraParameters, calib: CalibrationResult):
+def stereo_rectify(device_pair: DevicePair, image_size: Tuple[int, int], calib: CalibrationResult):
     # transform inner camera calibration to outer camera calibration transform
     if calib.R_14 is not None:
         R = calib.R_14[:3, :3].astype(np.float64)
@@ -316,13 +340,13 @@ def stereo_rectify(device_pair: DevicePair, camera_params: CameraParameters, cal
                                                         distCoeffs=calib.coeffs_left,
                                                         R=R1,
                                                         newCameraMatrix=P1,
-                                                        size=camera_params.image_size,
+                                                        size=image_size,
                                                         m1type=cv.CV_16SC2)
     right_map_1, right_map_2 = cv.initUndistortRectifyMap(cameraMatrix=calib.camera_matrix_right,
                                                           distCoeffs=calib.coeffs_right,
                                                           R=R1,
                                                           newCameraMatrix=P1,
-                                                          size=camera_params.image_size,
+                                                          size=image_size,
                                                           m1type=cv.CV_16SC2)
 
     rectification_result = RectificationResult(left_map_1,
@@ -332,3 +356,67 @@ def stereo_rectify(device_pair: DevicePair, camera_params: CameraParameters, cal
                                                R1, R2, P1, P2, Q,
                                                roi1, roi2)
     return rectification_result
+
+
+# class CalibrationResult:
+# retval: float
+# camera_matrix_left: np.ndarray
+# coeffs_left: np.ndarray
+# camera_matrix_right: np.ndarray
+# coeffs_right: np.ndarray
+# R: np.ndarray
+# T: np.ndarray
+# E: np.ndarray
+# F: np.ndarray
+# per_view_errors: np.ndarray
+# R_14: np.ndarray | None  # optional 4x4 transformation matrix from outer left to outer right
+# image_size: Tuple[int, int]
+
+class CalibrationResultEncoder(JSONEncoder):
+
+    def __serialize_calibration_result(self, obj: CalibrationResult):
+        o = {
+            "retval": obj.retval,
+            "camera_matrix_left": obj.camera_matrix_left.tolist(),
+            "distortion_coefficients_left": obj.coeffs_left.ravel().tolist(),
+            "camera_matrix_right": obj.camera_matrix_right.tolist(),
+            "distortion_coefficients_right": obj.coeffs_right.ravel().tolist(),
+            "R": obj.R.tolist(),
+            "T": obj.T.ravel().tolist(),
+            "E": obj.E.tolist(),
+            "F": obj.F.tolist(),
+            "per_view_errors": obj.per_view_errors.tolist(),
+            "R_14": obj.R_14.tolist(),
+            "image_size": obj.image_size
+        }
+        return o
+
+    def default(self, obj):
+        if isinstance(obj, CalibrationResult):
+            return self.__serialize_calibration_result(obj)
+        return json.JSONEncoder.default(self, obj)
+
+
+def write_calibration_to_file(calibration_result: CalibrationResult):
+    filename = f"Calibration_{datetime.now().strftime('%y%m%d_%H%M%S')}"
+    with open(filename + ".json", "x") as f:
+        json.dump(calibration_result, f, cls=CalibrationResultEncoder, indent=2)
+        print(f"Written human-readable calibration data to file: {filename + '.json'}")
+
+    with open(filename + ".npy", "xb") as f:
+        # order matters, save all fields of Calibration result
+        for field in fields(CalibrationResult):
+            np.save(f, getattr(calibration_result, field.name))
+        print(f"Written binary calibration data to file: {filename + '.npy'}")
+
+
+def load_calibration_from_file(filename: str) -> CalibrationResult:
+    with open(filename, "rb") as f:
+        # this is hacky, iterate through the fields and load the data in that order from the .npy file
+        calibration_result = CalibrationResult(None, None, None, None, None, None, None, None, None, None, None, None)
+        for field in fields(CalibrationResult):
+            value = np.load(f)
+            setattr(calibration_result, field.name, value)
+
+    print(f"Calibration loaded from {filename}:\n{calibration_result}")
+    return calibration_result

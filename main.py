@@ -1,5 +1,6 @@
 import time
 import datetime
+import argparse
 
 import cv2 as cv
 import numpy as np
@@ -8,7 +9,7 @@ from device_utility.DeviceManager import DeviceManager, DevicePair
 from device_utility.utils import set_sensor_option, get_sensor_option, get_stereo_extrinsic
 from scipy.interpolate import interp1d
 
-from camera_calibration import run_camera_calibration, RectificationResult
+from camera_calibration import run_camera_calibration, stereo_rectify, RectificationResult, load_calibration_from_file
 
 # GLOBALS
 WINDOW_IR_L = "infrared left"
@@ -146,7 +147,7 @@ def on_mouse(event, x, y, flags, user_data):
         MOUSE_X, MOUSE_Y = x, y
 
 
-def main():
+def main(args):
     ctx = rs.context()
     device_manager = DeviceManager(ctx)
     try:
@@ -158,9 +159,15 @@ def main():
     device_pair = device_manager.create_device_pair(left_serial, right_serial)
     set_device_options(device_pair)
 
-    calibration_result, rectification_result = run_camera_calibration(device_pair)
+    if args.calibration:
+        calibration_result = load_calibration_from_file(args.calibration)
+        rectification_result = stereo_rectify(device_pair, calibration_result.image_size, calibration_result)
+    else:
+        calibration_result, rectification_result = run_camera_calibration(device_pair)
 
-    device_pair.start(1280, 720, 15)
+    # we only need ir streams -> even only the outer streams
+    # depth necessary to get intrinsics, although those could be gotten from ir streams as well
+    device_pair.start(1280, 720, 15, streams=(rs.stream.infrared,rs.stream.depth))
 
     left_intrinsic: rs.intrinsics = device_pair.left.pipeline_profile.get_stream(
         rs.stream.depth).as_video_stream_profile().get_intrinsics()
@@ -252,4 +259,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(prog="Wide-baseline stereo implementation")
+    parser.add_argument("-c", "--calibration", help=".npy file containing the numpy-serialized calibration data")
+    args = parser.parse_args()
+    main(args)
