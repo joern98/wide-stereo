@@ -1,3 +1,5 @@
 venv/
 .idea/
-Screenshot*.png
+Screenshot_*.png
+Calibration_*.json
+Calibration_*.npy
