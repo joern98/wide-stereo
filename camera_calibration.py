@@ -1,3 +1,4 @@
+import json
 import threading
 import time
 from dataclasses import dataclass, fields
@@ -5,13 +6,12 @@ from datetime import datetime
 from json import JSONEncoder
 from typing import Tuple, Sequence
 
-import json
-
 import cv2 as cv
 import numpy as np
+import pyrealsense2 as rs
+
 from device_utility.DevicePair import DevicePair
 from device_utility.utils import set_sensor_option, get_stereo_extrinsic
-import pyrealsense2 as rs
 
 NUM_PATTERNS_REQUIRED = 10
 # https://docs.opencv.org/4.x/d9/d5d/classcv_1_1TermCriteria.html, (TYPE, iterations, epsilon)
@@ -23,9 +23,9 @@ WINDOW_IMAGE_RIGHT = "right ir"
 # cv.UMat is np.ndarray internally
 @dataclass()
 class CalibrationResult:
-    # return values: retval, cameraMatrix1, distCoeffs1, cameraMatrix2, distCoeffs2, R, T, E, F, perViewErrors
+    # return values: retval (rms), cameraMatrix1, distCoeffs1, cameraMatrix2, distCoeffs2, R, T, E, F, perViewErrors
     # tuple[float, UMat, UMat, UMat, UMat, UMat, UMat, UMat, UMat, UMat
-    retval: float
+    rms: float
     camera_matrix_left: np.ndarray
     coeffs_left: np.ndarray
     camera_matrix_right: np.ndarray
@@ -89,7 +89,6 @@ def run_camera_calibration(device_pair: DevicePair) -> Tuple[CalibrationResult, 
 
     # transform calibration
     calibration_result.R_14 = transform_inner_to_outer_stereo(camera_parameters, calibration_result)
-    print(calibration_result.R_14)
 
     rectification_result = stereo_rectify(device_pair, camera_parameters.image_size, calibration_result)
 
@@ -254,7 +253,7 @@ def rs_intrinsics_to_camera_matrix(intrinsics: rs.intrinsics) -> np.ndarray:
 def stereo_calibrate(device_pair: DevicePair, camera_params: CameraParameters, object_points, image_points_left,
                      image_points_right):
     # parameters: cv.stereoCalibrate(	objectPoints, imagePoints1, imagePoints2, cameraMatrix1, distCoeffs1, cameraMatrix2, distCoeffs2, imageSize,...)
-    # return values: retval, cameraMatrix1, distCoeffs1, cameraMatrix2, distCoeffs2, R, T, E, F, perViewErrors
+    # return values: retval (rms), cameraMatrix1, distCoeffs1, cameraMatrix2, distCoeffs2, R, T, E, F, perViewErrors
     per_view_errors = np.zeros(np.size(object_points, 0), np.float32)
     r = np.zeros((3, 3), np.float32)
     t = np.zeros((3, 1), np.float32)
@@ -273,7 +272,7 @@ def stereo_calibrate(device_pair: DevicePair, camera_params: CameraParameters, o
 
     # set R_14 if its outer pair
     calibration_result = CalibrationResult(*result, R_14=None, image_size=camera_params.image_size)
-    print(f"stereo calibration retval: {calibration_result.retval}")
+    print(f"stereo calibration rms: {calibration_result.rms}")
     print(f"stereo calibration per view errors: \n{calibration_result.per_view_errors}")
     return calibration_result
 
@@ -358,25 +357,11 @@ def stereo_rectify(device_pair: DevicePair, image_size: Tuple[int, int], calib: 
     return rectification_result
 
 
-# class CalibrationResult:
-# retval: float
-# camera_matrix_left: np.ndarray
-# coeffs_left: np.ndarray
-# camera_matrix_right: np.ndarray
-# coeffs_right: np.ndarray
-# R: np.ndarray
-# T: np.ndarray
-# E: np.ndarray
-# F: np.ndarray
-# per_view_errors: np.ndarray
-# R_14: np.ndarray | None  # optional 4x4 transformation matrix from outer left to outer right
-# image_size: Tuple[int, int]
-
 class CalibrationResultEncoder(JSONEncoder):
 
     def __serialize_calibration_result(self, obj: CalibrationResult):
         o = {
-            "retval": obj.retval,
+            "rms": obj.rms,
             "camera_matrix_left": obj.camera_matrix_left.tolist(),
             "distortion_coefficients_left": obj.coeffs_left.ravel().tolist(),
             "camera_matrix_right": obj.camera_matrix_right.tolist(),

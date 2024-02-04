@@ -167,7 +167,7 @@ def main(args):
 
     # we only need ir streams -> even only the outer streams
     # depth necessary to get intrinsics, although those could be gotten from ir streams as well
-    device_pair.start(1280, 720, 15, streams=(rs.stream.infrared,rs.stream.depth))
+    device_pair.start(1280, 720, 15, streams=(rs.stream.infrared, rs.stream.depth))
 
     left_intrinsic: rs.intrinsics = device_pair.left.pipeline_profile.get_stream(
         rs.stream.depth).as_video_stream_profile().get_intrinsics()
