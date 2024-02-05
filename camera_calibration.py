@@ -80,15 +80,15 @@ def run_camera_calibration(device_pair: DevicePair) -> Tuple[CalibrationResult, 
     device_pair.start(width=1280, height=720, fps=30, streams=(rs.stream.infrared,))
 
     # inner cameras
-    camera_parameters = collect_camera_parameters(device_pair, 2, 1)
+    camera_parameters = collect_camera_parameters(device_pair, 1, 2)
 
-    object_points, image_points_left, image_points_right = find_chessboard_corners(device_pair)
+    object_points, image_points_left, image_points_right = find_chessboard_corners(device_pair, 1, 2)
 
     calibration_result = stereo_calibrate(device_pair, camera_parameters, object_points, image_points_left,
                                           image_points_right)
 
     # transform calibration
-    calibration_result.R_14 = transform_inner_to_outer_stereo(camera_parameters, calibration_result)
+    # calibration_result.R_14 = transform_inner_to_outer_stereo(camera_parameters, calibration_result)
 
     rectification_result = stereo_rectify(device_pair, camera_parameters.image_size, calibration_result)
 
@@ -131,7 +131,7 @@ def collect_camera_parameters(device_pair: DevicePair, left_ir_index=1, right_ir
 
 
 # https://docs.opencv.org/4.x/da/d0d/tutorial_camera_calibration_pattern.html
-def find_chessboard_corners(device_pair: DevicePair):
+def find_chessboard_corners(device_pair: DevicePair, left_ir=1, right_ir=2):
     # turn of ir pattern emitters
     depth_sensor_left: rs.depth_sensor = device_pair.left.device.first_depth_sensor()
     depth_sensor_right: rs.depth_sensor = device_pair.right.device.first_depth_sensor()
@@ -168,18 +168,19 @@ def find_chessboard_corners(device_pair: DevicePair):
         frame_left, frame_right = device_pair.wait_for_frames()
 
         # check frame timestamps
-        ts_l = frame_left.get_timestamp()
-        ts_r = frame_right.get_timestamp()
-        d_ts = abs(ts_l - ts_r)
-        print(f"d ts: {d_ts}")
+        # TODO monitor using matplotlib. don't print()
+        # ts_l = frame_left.get_timestamp()
+        # ts_r = frame_right.get_timestamp()
+        # d_ts = abs(ts_l - ts_r)
+        # print(f"d ts: {d_ts}")
 
         # outer cameras
         # ir_left = frame_left.get_infrared_frame(1)
         # ir_right = frame_right.get_infrared_frame(2)
 
         # inner cameras
-        ir_left = frame_left.get_infrared_frame(2)
-        ir_right = frame_right.get_infrared_frame(1)
+        ir_left = frame_left.get_infrared_frame(left_ir)
+        ir_right = frame_right.get_infrared_frame(right_ir)
         image_left = np.array(ir_left.get_data())
         image_right = np.array(ir_right.get_data())
 
@@ -189,8 +190,9 @@ def find_chessboard_corners(device_pair: DevicePair):
 
         # https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html#gadc5bcb05cb21cf1e50963df26986d7c9
         # this is rather slow, maybe try multiprocessing or multithreading
-        ret_l, corners_left = cv.findChessboardCornersSB(image_left, (5, 7), flags=cv.CALIB_CB_MARKER)
-        ret_r, corners_right = cv.findChessboardCornersSB(image_right, (5, 7), flags=cv.CALIB_CB_MARKER)
+        # cv.CALIB_CB_MARKER leads to much worse results
+        ret_l, corners_left = cv.findChessboardCornersSB(image_left, (5, 7), flags=0)
+        ret_r, corners_right = cv.findChessboardCornersSB(image_right, (5, 7), flags=0)
 
         # if both images had valid chessboard patterns found, refine them and append them to the output array
         if ret_l and ret_r and not cooldown:
@@ -204,6 +206,8 @@ def find_chessboard_corners(device_pair: DevicePair):
 
             image_points_left.append(corners_left)
             image_points_right.append(corners_right)
+
+            print(f"{np.size(object_points, 0)} of {NUM_PATTERNS_REQUIRED}")
 
             # draw corners on images
             # cv.drawChessboardCorners(image_left, (7, 7), corners_subpixel_left, ret_l)
@@ -219,10 +223,10 @@ def find_chessboard_corners(device_pair: DevicePair):
         cv.imshow(WINDOW_IMAGE_LEFT, image_left)
         cv.imshow(WINDOW_IMAGE_RIGHT, image_right)
 
-        t1 = time.perf_counter_ns()
-        td = t1 - t0
-        t0 = t1
-        print(f"td: {td / 1000000:0.4} ms")
+        # t1 = time.perf_counter_ns()
+        # td = t1 - t0
+        # t0 = t1
+        # print(f"td: {td / 1000000:0.4} ms")
         if cv.waitKey(1) == 27:  # ESCAPE
             print(f"chessboard corner process aborted, found {np.size(object_points, 0)} sets of correspondences")
             break
@@ -273,7 +277,7 @@ def stereo_calibrate(device_pair: DevicePair, camera_params: CameraParameters, o
     # set R_14 if its outer pair
     calibration_result = CalibrationResult(*result, R_14=None, image_size=camera_params.image_size)
     print(f"stereo calibration rms: {calibration_result.rms}")
-    print(f"stereo calibration per view errors: \n{calibration_result.per_view_errors}")
+    # print(f"stereo calibration per view errors: \n{calibration_result.per_view_errors}")
     return calibration_result
 
 
@@ -371,7 +375,7 @@ class CalibrationResultEncoder(JSONEncoder):
             "E": obj.E.tolist(),
             "F": obj.F.tolist(),
             "per_view_errors": obj.per_view_errors.tolist(),
-            "R_14": obj.R_14.tolist(),
+            "R_14": "Direct outer calibration, see R and T" if obj.R_14 is None else obj.R_14.tolist(),
             "image_size": obj.image_size
         }
         return o
@@ -391,7 +395,9 @@ def write_calibration_to_file(calibration_result: CalibrationResult):
     with open(filename + ".npy", "xb") as f:
         # order matters, save all fields of Calibration result
         for field in fields(CalibrationResult):
-            np.save(f, getattr(calibration_result, field.name))
+            attr = getattr(calibration_result, field.name)
+            # if R_14 is none, save it as 0, since we cannot save None directly without using pickle
+            np.save(f, attr if attr is not None else [0])
         print(f"Written binary calibration data to file: {filename + '.npy'}")
 
 
@@ -401,6 +407,9 @@ def load_calibration_from_file(filename: str) -> CalibrationResult:
         calibration_result = CalibrationResult(None, None, None, None, None, None, None, None, None, None, None, None)
         for field in fields(CalibrationResult):
             value = np.load(f)
+            # see above for R_14
+            if value == [0]:
+                value = None
             setattr(calibration_result, field.name, value)
 
     print(f"Calibration loaded from {filename}:\n{calibration_result}")

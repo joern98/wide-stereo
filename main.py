@@ -82,14 +82,16 @@ def change_exposure_time(value, device_pair: DevicePair):
     set_sensor_option(depth_sensor_right, rs.option.exposure, value)
 
 
-def calculate_wide_stereo_depth(left: np.ndarray, right: np.ndarray, baseline, focal_length):
+def calculate_wide_stereo_depth(left: np.ndarray, right: np.ndarray, rectification: RectificationResult):
     global stereo_algorithm
     # omit rectification for now
     disp = stereo_algorithm.compute(left, right).astype(np.float32) / 16.0
 
     # disp to depth using formula d=fb/z <=> z=fb/d
-    fb = focal_length * abs(baseline)
-    depth = fb / disp
+    # Q: Output 4×4 disparity-to-depth mapping matrix (see reprojectImageTo3D).
+    # https://docs.opencv.org/3.4/d9/d0c/group__calib3d.html#ga1bc1152bd57d63bc524204f21fde6e02
+
+    depth = cv.reprojectImageTo3D(disp, rectification.Q)
     return depth
 
 
@@ -118,9 +120,12 @@ def wide_stereo_from_frames(left: rs.composite_frame, right: rs.composite_frame,
                                borderMode=cv.BORDER_CONSTANT,
                                borderValue=(0, 0, 0))
 
+    cv.imshow(WINDOW_IR_L, left_rectified)
+    cv.imshow(WINDOW_IR_R, right_rectified)
+
     # TODO inverse mapping to account for rectification has to be computed
 
-    return calculate_wide_stereo_depth(left_rectified, right_rectified, baseline, focal_length)
+    return calculate_wide_stereo_depth(left_rectified, right_rectified, rectification)
 
 
 # TODO turn of auto exposure and set both the same ->
@@ -177,7 +182,7 @@ def main(args):
     left_stereo_extrinsic = get_stereo_extrinsic(device_pair.left.pipeline_profile)
     right_stereo_extrinsic = get_stereo_extrinsic(device_pair.right.pipeline_profile)
 
-    wide_stereo_baseline = calibration_result.R_14[0, 3]
+    wide_stereo_baseline = calibration_result.T[0, 0] if calibration_result.R_14 is None else calibration_result.R_14[0, 3]
     print(f"Left camera intrinsic parameters: {left_intrinsic}")
     print(f"wide baseline: {wide_stereo_baseline:.4} m")
 
@@ -219,8 +224,8 @@ def main(args):
     while run:
         # TODO Screenshots, all frames
         left_frame, right_frame = device_pair.wait_for_frames()
-        cv.imshow(WINDOW_IR_L, np.asanyarray(left_frame.get_infrared_frame(1).get_data()))
-        cv.imshow(WINDOW_IR_R, np.asanyarray(right_frame.get_infrared_frame(2).get_data()))
+        # cv.imshow(WINDOW_IR_L, np.asanyarray(left_frame.get_infrared_frame(1).get_data()))
+        # cv.imshow(WINDOW_IR_R, np.asanyarray(right_frame.get_infrared_frame(2).get_data()))
 
         depth = wide_stereo_from_frames(left_frame,
                                         right_frame,
@@ -228,8 +233,9 @@ def main(args):
                                         left_intrinsic.fx,
                                         rectification_result)
 
-        depth_colormapped = cv.applyColorMap(map_depth_to_uint8(depth), cv.COLORMAP_JET)
-        depth_at_cursor = depth[np.clip(MOUSE_Y, 0, 719), np.clip(MOUSE_X, 0, 1279)]
+        # only map z-component of depth map
+        depth_colormapped = cv.applyColorMap(map_depth_to_uint8(depth)[:, :, 2:3], cv.COLORMAP_JET)
+        depth_at_cursor = depth[np.clip(MOUSE_Y, 0, 719), np.clip(MOUSE_X, 0, 1279), 2]
 
         cv.putText(depth_colormapped, f"{depth_at_cursor:.3} m", [10, 40], fontFace=cv.FONT_HERSHEY_PLAIN,
                    fontScale=1, color=[0, 0, 0], thickness=1)
