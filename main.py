@@ -1,5 +1,6 @@
 import argparse
 import datetime
+import os
 import time
 
 import cv2 as cv
@@ -19,6 +20,7 @@ WINDOW_DEPTH = "depth"
 WINDOW_CONTROLS = "controls"
 
 MOUSE_X, MOUSE_Y = 0, 0
+MOUSE_OVER_WINDOW = ""
 
 # TODO test StereoBM just for completeness
 stereo_algorithm = cv.StereoSGBM.create(
@@ -121,12 +123,23 @@ def wide_stereo_from_frames(left: rs.composite_frame, right: rs.composite_frame,
                                borderMode=cv.BORDER_CONSTANT,
                                borderValue=(0, 0, 0))
 
+    wide_stereo_result = calculate_wide_stereo_depth(left_rectified, right_rectified, rectification)
+
+    cv.line(left_rectified, (0, MOUSE_Y), (left_rectified.shape[1], MOUSE_Y), color=(0,), lineType=cv.LINE_4, thickness=1)
+    cv.line(right_rectified, (0, MOUSE_Y), (left_rectified.shape[1], MOUSE_Y), color=(0,), lineType=cv.LINE_4, thickness=1)
+    if MOUSE_OVER_WINDOW != WINDOW_IR_L:
+        # images are greyscale, so no colored line possible
+        cv.drawMarker(left_rectified, (MOUSE_X, MOUSE_Y), (0,), cv.MARKER_CROSS, markerSize=11, thickness=1)
+
+    if MOUSE_OVER_WINDOW != WINDOW_IR_R:
+        cv.drawMarker(right_rectified, (MOUSE_X, MOUSE_Y), (0,), cv.MARKER_CROSS, markerSize=11, thickness=1)
+
+
+
     cv.imshow(WINDOW_IR_L, left_rectified)
     cv.imshow(WINDOW_IR_R, right_rectified)
 
-    # TODO inverse mapping to account for rectification has to be computed
-
-    return calculate_wide_stereo_depth(left_rectified, right_rectified, rectification)
+    return wide_stereo_result
 
 
 # TODO turn of auto exposure and set both the same ->
@@ -151,17 +164,25 @@ def set_device_options(device_pair: DevicePair):
     print(gain_l)
     print(gain_r)
 
+# pass window name as user data
 def on_mouse(event, x, y, flags, user_data):
-    global MOUSE_X, MOUSE_Y
+    global MOUSE_X, MOUSE_Y, MOUSE_OVER_WINDOW
     if event == cv.EVENT_MOUSEMOVE:
         MOUSE_X, MOUSE_Y = x, y
+        MOUSE_OVER_WINDOW = user_data
 
 
 def main(args):
     ctx = rs.context()
     device_manager = DeviceManager(ctx)
     try:
-        left_serial, right_serial = DeviceManager.serial_selection()
+        left_serial = os.environ.get("RS_LEFT_SERIAL")
+        right_serial = os.environ.get("RS_RIGHT_SERIAL")
+        if left_serial and right_serial is not None:
+            print(f"'RS_LEFT_SERIAL' and 'RS_RIGHT_SERIAL' environment variables are set:\n"
+                  f"Left Device: {left_serial}\nRight Device: {right_serial}")
+        else:
+            left_serial, right_serial = DeviceManager.serial_selection()
     except Exception as e:
         print("Serial selection failed: \n", e)
         return
@@ -197,7 +218,9 @@ def main(args):
     cv.namedWindow(WINDOW_CONTROLS)
     cv.resizeWindow(WINDOW_CONTROLS, 600, 400)
 
-    cv.setMouseCallback(WINDOW_DEPTH, on_mouse)
+    cv.setMouseCallback(WINDOW_DEPTH, on_mouse, WINDOW_DEPTH)
+    cv.setMouseCallback(WINDOW_IR_L, on_mouse, WINDOW_IR_L)
+    cv.setMouseCallback(WINDOW_IR_R, on_mouse, WINDOW_IR_R)
 
     cv.createTrackbar("blockSize", WINDOW_CONTROLS, stereo_algorithm.getBlockSize(), 15, change_blockSize)
     cv.createTrackbar("p1", WINDOW_CONTROLS, stereo_algorithm.getP1(), 1000, change_P1)
@@ -249,6 +272,8 @@ def main(args):
         t0 = t1
         cv.putText(depth_colormapped, f"{td:.6} ms, {1000 / td:.3} FPS", [10, 80], fontFace=cv.FONT_HERSHEY_PLAIN,
                    fontScale=1, color=[0, 0, 0], thickness=1)
+        if MOUSE_OVER_WINDOW != WINDOW_DEPTH:
+            cv.drawMarker(depth_colormapped, [MOUSE_X, MOUSE_Y], [0, 0, 0], cv.MARKER_CROSS, markerSize=11, thickness=1)
         cv.imshow(WINDOW_DEPTH, depth_colormapped)
 
         key = cv.pollKey()
