@@ -1,15 +1,16 @@
-import time
-import datetime
 import argparse
+import datetime
+import time
 
 import cv2 as cv
 import numpy as np
 import pyrealsense2 as rs
-from device_utility.DeviceManager import DeviceManager, DevicePair
-from device_utility.utils import set_sensor_option, get_sensor_option, get_stereo_extrinsic
 from scipy.interpolate import interp1d
 
-from camera_calibration import run_camera_calibration, stereo_rectify, RectificationResult, load_calibration_from_file
+from device_utility.DeviceManager import DeviceManager, DevicePair
+from device_utility.camera_calibration import run_camera_calibration, stereo_rectify, RectificationResult, \
+    load_calibration_from_file
+from device_utility.utils import set_sensor_option, get_sensor_option, get_stereo_extrinsic
 
 # GLOBALS
 WINDOW_IR_L = "infrared left"
@@ -22,7 +23,7 @@ MOUSE_X, MOUSE_Y = 0, 0
 # TODO test StereoBM just for completeness
 stereo_algorithm = cv.StereoSGBM.create(
     minDisparity=1,
-    numDisparities=16 * 6,
+    numDisparities=16 * 10,
     blockSize=5,
     P1=8 * 3 * 3 ** 2,
     P2=31 * 3 * 3 ** 2,
@@ -145,6 +146,10 @@ def set_device_options(device_pair: DevicePair):
     set_sensor_option(depth_sensor_left, rs.option.enable_auto_exposure, 0)
     set_sensor_option(depth_sensor_right, rs.option.enable_auto_exposure, 0)
 
+    gain_l = get_sensor_option(depth_sensor_left, rs.option.gain)
+    gain_r = get_sensor_option(depth_sensor_right, rs.option.gain)
+    print(gain_l)
+    print(gain_r)
 
 def on_mouse(event, x, y, flags, user_data):
     global MOUSE_X, MOUSE_Y
