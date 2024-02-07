@@ -224,7 +224,7 @@ def main(args):
 
     cv.createTrackbar("blockSize", WINDOW_CONTROLS, stereo_algorithm.getBlockSize(), 15, change_blockSize)
     cv.createTrackbar("p1", WINDOW_CONTROLS, stereo_algorithm.getP1(), 1000, change_P1)
-    cv.createTrackbar("p2", WINDOW_CONTROLS, stereo_algorithm.getP2(), 1000, change_P2)
+    cv.createTrackbar("p2", WINDOW_CONTROLS, stereo_algorithm.getP2(), 3000, change_P2)
     cv.createTrackbar("disp12MaxDiff", WINDOW_CONTROLS, stereo_algorithm.getDisp12MaxDiff(), 16, change_disp12MaxDiff)
     cv.createTrackbar("preFilterCap", WINDOW_CONTROLS, stereo_algorithm.getPreFilterCap(), 16, change_preFilterCap)
     cv.createTrackbar("uniquenessRatio", WINDOW_CONTROLS, stereo_algorithm.getUniquenessRatio(), 16,
