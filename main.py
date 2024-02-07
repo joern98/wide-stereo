@@ -155,14 +155,13 @@ def set_device_options(device_pair: DevicePair):
         depth_sensor_left.set_option(rs.option.emitter_always_on, True)
         depth_sensor_right.set_option(rs.option.emitter_always_on, True)
 
+    # set ir emitter to full power
+    set_sensor_option(depth_sensor_left, rs.option.laser_power, 360)
+    set_sensor_option(depth_sensor_right, rs.option.laser_power, 360)
+
     # turn off auto exposure
     set_sensor_option(depth_sensor_left, rs.option.enable_auto_exposure, 0)
     set_sensor_option(depth_sensor_right, rs.option.enable_auto_exposure, 0)
-
-    gain_l = get_sensor_option(depth_sensor_left, rs.option.gain)
-    gain_r = get_sensor_option(depth_sensor_right, rs.option.gain)
-    print(gain_l)
-    print(gain_r)
 
 # pass window name as user data
 def on_mouse(event, x, y, flags, user_data):
@@ -264,14 +263,15 @@ def main(args):
         # only map z-component of depth map
         depth_colormapped = cv.applyColorMap(map_depth_to_uint8(depth)[:, :, 2:3], cv.COLORMAP_JET)
         depth_at_cursor = depth[np.clip(MOUSE_Y, 0, 719), np.clip(MOUSE_X, 0, 1279), 2]
+        distance_at_cursor = np.linalg.norm(depth[np.clip(MOUSE_Y, 0, 719), np.clip(MOUSE_X, 0, 1279)])
 
-        cv.putText(depth_colormapped, f"{depth_at_cursor:.3} m", [10, 40], fontFace=cv.FONT_HERSHEY_PLAIN,
-                   fontScale=1, color=[0, 0, 0], thickness=1)
+        cv.putText(depth_colormapped, f"Depth/Distance: {depth_at_cursor:.3} / {distance_at_cursor:.3} m", (10, 40), fontFace=cv.FONT_HERSHEY_PLAIN,
+                   fontScale=2, color=(220, 220, 220), thickness=2)
         t1 = time.perf_counter_ns()
         td = (t1 - t0) / 1000000
         t0 = t1
-        cv.putText(depth_colormapped, f"{td:.6} ms, {1000 / td:.3} FPS", [10, 80], fontFace=cv.FONT_HERSHEY_PLAIN,
-                   fontScale=1, color=[0, 0, 0], thickness=1)
+        cv.putText(depth_colormapped, f"{td:.6} ms, {1000 / td:.3} FPS", (10, 80), fontFace=cv.FONT_HERSHEY_PLAIN,
+                   fontScale=2, color=(220, 220, 220), thickness=2)
         if MOUSE_OVER_WINDOW != WINDOW_DEPTH:
             cv.drawMarker(depth_colormapped, [MOUSE_X, MOUSE_Y], [0, 0, 0], cv.MARKER_CROSS, markerSize=11, thickness=1)
         cv.imshow(WINDOW_DEPTH, depth_colormapped)
