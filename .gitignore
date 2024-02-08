@@ -3,3 +3,4 @@ venv/
 Screenshot_*.png
 Calibration_*.json
 Calibration_*.npy
+*.ply
