@@ -1,8 +1,5 @@
 import argparse
-import datetime
 import os
-from dataclasses import dataclass
-from typing import Tuple
 
 import time
 
@@ -15,7 +12,8 @@ from scipy.interpolate import interp1d
 from device_utility.DeviceManager import DeviceManager, DevicePair
 from device_utility.camera_calibration import run_camera_calibration, stereo_rectify, RectificationResult, \
     load_calibration_from_file, CalibrationResult
-from device_utility.utils import set_sensor_option, get_sensor_option, get_stereo_extrinsic
+from device_utility.utils import set_sensor_option, get_sensor_option
+from utility import CameraParameters, save_point_cloud, get_camera_parameters, save_screenshot
 
 # GLOBALS
 WINDOW_IR_L = "infrared left"
@@ -105,51 +103,6 @@ def change_exposure_time(value, device_pair: DevicePair):
     depth_sensor_right: rs.depth_sensor = device_pair.right.device.first_depth_sensor()
     set_sensor_option(depth_sensor_left, rs.option.exposure, value)
     set_sensor_option(depth_sensor_right, rs.option.exposure, value)
-
-
-@dataclass()
-class CameraParameters:
-    left_intrinsics: rs.intrinsics
-    right_intrinsics: rs.intrinsics
-    left_pinhole_intrinsics: o3d.camera.PinholeCameraIntrinsic
-    right_pinhole_intrinsics: o3d.camera.PinholeCameraIntrinsic
-    left_stereo_extrinsic: rs.extrinsics
-    right_stereo_extrinsic: rs.extrinsics
-    image_size: Tuple[int, int]
-
-
-def save_point_cloud(pc: o3d.geometry.PointCloud):
-    POINT_CLOUD_SAVE_DIR = os.path.join("PointClouds")
-    filename = f"PointCloud_{datetime.datetime.now().strftime('%y-%m-%d_%H-%M-%S-%f')}.ply"
-    filepath = os.path.join(POINT_CLOUD_SAVE_DIR, filename)
-    o3d.io.write_point_cloud(filepath, pc)
-    print(f"Point-Cloud saved to {filepath}")
-
-
-def get_camera_parameters(device_pair):
-    left_intrinsic: rs.intrinsics = device_pair.left.pipeline_profile.get_stream(
-        rs.stream.depth).as_video_stream_profile().get_intrinsics()
-    right_intrinsic: rs.intrinsics = device_pair.right.pipeline_profile.get_stream(
-        rs.stream.depth).as_video_stream_profile().get_intrinsics()
-
-    left_pinhole_intrinsics = intrinsics_to_o3d_pinhole_intrinsic(left_intrinsic)
-    right_pinhole_intrinsics = intrinsics_to_o3d_pinhole_intrinsic(right_intrinsic)
-
-    left_stereo_extrinsic = get_stereo_extrinsic(device_pair.left.pipeline_profile)
-    right_stereo_extrinsic = get_stereo_extrinsic(device_pair.right.pipeline_profile)
-    return CameraParameters(left_intrinsic, right_intrinsic,
-                            left_pinhole_intrinsics, right_pinhole_intrinsics,
-                            left_stereo_extrinsic, right_stereo_extrinsic,
-                            (left_intrinsic.width, left_intrinsic.height))
-
-
-def intrinsics_to_o3d_pinhole_intrinsic(intrinsic: rs.intrinsics):
-    return o3d.camera.PinholeCameraIntrinsic(width=intrinsic.width,
-                                             height=intrinsic.height,
-                                             cx=intrinsic.ppx,
-                                             cy=intrinsic.ppy,
-                                             fx=intrinsic.fx,
-                                             fy=intrinsic.fy)
 
 
 def calculate_wide_stereo_depth(left: np.ndarray, right: np.ndarray, rectification: RectificationResult):
@@ -434,22 +387,35 @@ def main(args):
                                                      wide_stereo_baseline,
                                                      camera_parameters.left_intrinsics.fx,
                                                      rectification_result)
+
+        # Find the maximum value of Z, it corresponds with pixels where no correspondence was found and disparity was set to minDisparity
+        wide_stereo_max_z = np.max(wide_stereo_points[:, :, 2:3])
+
+        # here, "Filter" means set to [0, 0, 0]
+        # Filter out all the pixels, where z is below a certain threshold
+        # TODO instead filter with the native stereo -> where it is below a certain threshold we dont need the wide stereo
         wide_stereo_points_threshold = np.where(wide_stereo_points[:, :, 2:3] > 0.5, wide_stereo_points, [0, 0, 0])
+
+        # Filter all the pixels where Z is equal to max Z, as these pixels represent invalid depths
+        wide_stereo_points_threshold = np.where(wide_stereo_points[:, :, 2:3] == wide_stereo_max_z, [0, 0, 0], wide_stereo_points)
 
         # only map z-component of wide_stereo_points map
         depth_colormapped = cv.applyColorMap(
             MAP_DEPTH_M_TO_BYTE(wide_stereo_points_threshold).astype(np.uint8)[:, :, 2:3],
             cv.COLORMAP_JET)
-        new_wide_point_cloud = o3d.geometry.PointCloud(
-            o3d.utility.Vector3dVector(wide_stereo_points_threshold.reshape(-1, 3)))
-        # try if this works, should work if order of points is kept intact
-        new_wide_point_cloud.colors = o3d.utility.Vector3dVector(depth_colormapped.reshape(-1, 3))
 
         # copy_to_point_cloud(new_wide_point_cloud, wide_point_cloud)
         # vis.update_geometry(wide_point_cloud)
 
         depth_at_cursor = wide_stereo_points[np.clip(MOUSE_Y, 0, 719), np.clip(MOUSE_X, 0, 1279), 2]
         distance_at_cursor = np.linalg.norm(wide_stereo_points[np.clip(MOUSE_Y, 0, 719), np.clip(MOUSE_X, 0, 1279)])
+
+        # TODO move live metrics to separate window
+        new_wide_point_cloud = o3d.geometry.PointCloud(
+            o3d.utility.Vector3dVector(wide_stereo_points_threshold.reshape(-1, 3)))
+        # try if this works, should work if order of points is kept intact
+        cv.cvtColor(depth_colormapped, cv.COLOR_BGR2RGB, dst=depth_colormapped)  # Open3D expects RGB [0, 1], OpenCV uses BGR [0, 255]
+        new_wide_point_cloud.colors = o3d.utility.Vector3dVector(depth_colormapped.reshape(-1, 3) / 0xFF)
 
         cv.putText(depth_colormapped, f"Depth/Distance: {depth_at_cursor:.3} / {distance_at_cursor:.3} m", (10, 40),
                    fontFace=cv.FONT_HERSHEY_PLAIN,
@@ -462,6 +428,7 @@ def main(args):
         if MOUSE_OVER_WINDOW != WINDOW_DEPTH:
             cv.drawMarker(depth_colormapped, [MOUSE_X, MOUSE_Y], [0, 0, 0], cv.MARKER_CROSS, markerSize=11, thickness=1)
         cv.imshow(WINDOW_DEPTH, depth_colormapped)
+
 
         # TODO color mapping, show wide_stereo_points streams, decimate native point clouds, integrate wide point cloud
         left_depth = np.asanyarray(left_frame.get_depth_frame().get_data())
@@ -511,12 +478,16 @@ def main(args):
         key = cv.pollKey()
         if key != -1:
             print(f"key code pressed: {key}")
-        if key == 27 or not vis.poll_events():  # ESCAPE
+            if key == 27:  # ESCAPE
+                run = False
+            if key == 115:  # s
+                save_screenshot(depth_colormapped, (MOUSE_X, MOUSE_Y))
+            if key == 112:  # p
+                save_point_cloud(combined_point_cloud)
+
+        if not vis.poll_events():
+            # poll_events returns false of window should close (X was clicked)
             run = False
-        if key == 115:  # s
-            save_screenshot(depth_colormapped)
-        if key == 112:  # p
-            save_point_cloud(combined_point_cloud)
 
         vis.update_renderer()
 
@@ -525,16 +496,6 @@ def main(args):
     cv.destroyAllWindows()
     print("Waiting for device pipelines to close...")
     device_pair.stop()
-
-
-def save_screenshot(image: np.ndarray):
-    SCREENSHOT_SAVE_DIR = os.path.join("Screenshots")
-    filename = f"Screenshot_{datetime.datetime.now().strftime('%y-%m-%d_%H-%M-%S-%f')}.png"
-    # add marker at mouse position to the saved image
-    cv.drawMarker(image, [MOUSE_X, MOUSE_Y], [0, 0, 0], cv.MARKER_SQUARE, markerSize=6, thickness=1)
-    filepath = os.path.join(SCREENSHOT_SAVE_DIR, filename)
-    cv.imwrite(filepath, image)
-    print(f"Screenshot saved to {filepath}")
 
 
 if __name__ == '__main__':
