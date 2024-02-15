@@ -40,7 +40,7 @@ MAP_DEPTH_MM_TO_BYTE = interp1d([0, 13000], [0, 255], bounds_error=False, fill_v
 # TODO save and load values
 stereo_sgm = cv.StereoSGBM.create(
     minDisparity=6,
-    numDisparities=16 * 6,
+    numDisparities=16 * 12,
     blockSize=3,
     P1=8 * 3 * 3 ** 2,
     P2=31 * 3 * 3 ** 2,
@@ -116,6 +116,14 @@ class CameraParameters:
     left_stereo_extrinsic: rs.extrinsics
     right_stereo_extrinsic: rs.extrinsics
     image_size: Tuple[int, int]
+
+
+def save_point_cloud(pc: o3d.geometry.PointCloud):
+    POINT_CLOUD_SAVE_DIR = os.path.join("PointClouds")
+    filename = f"PointCloud_{datetime.datetime.now().strftime('%y-%m-%d_%H-%M-%S-%f')}.ply"
+    filepath = os.path.join(POINT_CLOUD_SAVE_DIR, filename)
+    o3d.io.write_point_cloud(filepath, pc)
+    print(f"Point-Cloud saved to {filepath}")
 
 
 def get_camera_parameters(device_pair):
@@ -426,12 +434,14 @@ def main(args):
                                                      wide_stereo_baseline,
                                                      camera_parameters.left_intrinsics.fx,
                                                      rectification_result)
-        wide_stereo_points_threshold = np.where(wide_stereo_points[:, :, 2:3] > 2.1, wide_stereo_points, [0, 0, 0])
+        wide_stereo_points_threshold = np.where(wide_stereo_points[:, :, 2:3] > 0.5, wide_stereo_points, [0, 0, 0])
 
         # only map z-component of wide_stereo_points map
-        depth_colormapped = cv.applyColorMap(MAP_DEPTH_M_TO_BYTE(wide_stereo_points_threshold).astype(np.uint8)[:, :, 2:3],
-                                             cv.COLORMAP_JET)
-        new_wide_point_cloud = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(wide_stereo_points_threshold.reshape(-1, 3)))
+        depth_colormapped = cv.applyColorMap(
+            MAP_DEPTH_M_TO_BYTE(wide_stereo_points_threshold).astype(np.uint8)[:, :, 2:3],
+            cv.COLORMAP_JET)
+        new_wide_point_cloud = o3d.geometry.PointCloud(
+            o3d.utility.Vector3dVector(wide_stereo_points_threshold.reshape(-1, 3)))
         # try if this works, should work if order of points is kept intact
         new_wide_point_cloud.colors = o3d.utility.Vector3dVector(depth_colormapped.reshape(-1, 3))
 
@@ -459,7 +469,8 @@ def main(args):
         left_depth_threshold = np.where(left_depth < 2200, left_depth, 0)
         # right_depth_threshold = np.where(right_depth < 2200, right_depth, 0)
 
-        left_depth_colormap = cv.applyColorMap(MAP_DEPTH_MM_TO_BYTE(left_depth_threshold).astype(np.uint8), cv.COLORMAP_JET)
+        left_depth_colormap = cv.applyColorMap(MAP_DEPTH_MM_TO_BYTE(left_depth_threshold).astype(np.uint8),
+                                               cv.COLORMAP_JET)
         # right_depth_colormap = cv.applyColorMap(MAP_DEPTH_MM_TO_BYTE(right_depth_threshold).astype(np.uint8), cv.COLORMAP_JET)
 
         # show wide_stereo_points as BGR before converting to RGB, since imshow() expects BGR
@@ -503,15 +514,9 @@ def main(args):
         if key == 27 or not vis.poll_events():  # ESCAPE
             run = False
         if key == 115:  # s
-            filename = f"Screenshot_{datetime.datetime.now().strftime('%y-%m-%d_%H-%M-%S-%f')}.png"
-            # add marker at mouse position to the saved image
-            cv.drawMarker(depth_colormapped, [MOUSE_X, MOUSE_Y], [0, 0, 0], cv.MARKER_SQUARE, markerSize=6, thickness=1)
-            cv.imwrite(filename, depth_colormapped)
-            print(f"Screenshot saved as {filename}")
+            save_screenshot(depth_colormapped)
         if key == 112:  # p
-            filename = f"PointCloud_{datetime.datetime.now().strftime('%y-%m-%d_%H-%M-%S-%f')}.ply"
-            o3d.io.write_point_cloud(filename, combined_point_cloud)
-            print(f"Point-Cloud saved as {filename}")
+            save_point_cloud(combined_point_cloud)
 
         vis.update_renderer()
 
@@ -520,6 +525,16 @@ def main(args):
     cv.destroyAllWindows()
     print("Waiting for device pipelines to close...")
     device_pair.stop()
+
+
+def save_screenshot(image: np.ndarray):
+    SCREENSHOT_SAVE_DIR = os.path.join("Screenshots")
+    filename = f"Screenshot_{datetime.datetime.now().strftime('%y-%m-%d_%H-%M-%S-%f')}.png"
+    # add marker at mouse position to the saved image
+    cv.drawMarker(image, [MOUSE_X, MOUSE_Y], [0, 0, 0], cv.MARKER_SQUARE, markerSize=6, thickness=1)
+    filepath = os.path.join(SCREENSHOT_SAVE_DIR, filename)
+    cv.imwrite(filepath, image)
+    print(f"Screenshot saved to {filepath}")
 
 
 if __name__ == '__main__':

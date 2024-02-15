@@ -6,3 +6,5 @@ Calibration_*.npy
 *.ply
 ScreenCamera_*.json
 ScreenCapture_*.png
+/PointClouds/
+/Screenshots/
