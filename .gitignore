@@ -4,3 +4,5 @@ Screenshot_*.png
 Calibration_*.json
 Calibration_*.npy
 *.ply
+ScreenCamera_*.json
+ScreenCapture_*.png

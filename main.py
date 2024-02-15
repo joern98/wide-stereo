@@ -37,16 +37,16 @@ run = True
 MAP_DEPTH_M_TO_BYTE = interp1d([0, 13], [0, 255], bounds_error=False, fill_value=(0, 255))
 MAP_DEPTH_MM_TO_BYTE = interp1d([0, 13000], [0, 255], bounds_error=False, fill_value=(0, 255))
 
-# TODO test StereoBM just for completeness
+# TODO save and load values
 stereo_sgm = cv.StereoSGBM.create(
     minDisparity=6,
-    numDisparities=16 * 10,
-    blockSize=5,
+    numDisparities=16 * 6,
+    blockSize=3,
     P1=8 * 3 * 3 ** 2,
     P2=31 * 3 * 3 ** 2,
-    disp12MaxDiff=-1,
-    preFilterCap=0,
-    uniquenessRatio=8,
+    disp12MaxDiff=1,
+    preFilterCap=1,
+    uniquenessRatio=4,
     speckleWindowSize=100,
     speckleRange=1,
     mode=cv.STEREO_SGBM_MODE_SGBM
@@ -387,7 +387,7 @@ def main(args):
 
     # identity matrix with Y and Z flipped, left is origin
     # multiply right with left transform to flip Y [and Z] don't flip z, to be compatible with wide stereo
-    point_cloud_transform_left = np.matrix("1 0 0 0;0 -1 0 0; 0 0 1 0; 0 0 0 1")
+    point_cloud_transform_left = np.matrix("1 0 0 0;0 1 0 0; 0 0 1 0; 0 0 0 1")
     point_cloud_transform_right = device_offset_transform @ point_cloud_transform_left
 
     # we don't need the colormap in this step
@@ -407,11 +407,13 @@ def main(args):
                                                  rectification_result)
 
     wide_point_cloud = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(wide_stereo_points.reshape(-1, 3)))
-    o3d.io.write_point_cloud("wide_point_cloud.ply", wide_point_cloud)
 
-    vis.add_geometry(left_point_cloud, True)
-    vis.add_geometry(right_point_cloud, True)
-    vis.add_geometry(wide_point_cloud, True)
+    combined_point_cloud = o3d.geometry.PointCloud()
+
+    # vis.add_geometry(left_point_cloud, True)
+    # vis.add_geometry(right_point_cloud, True)
+    # vis.add_geometry(wide_point_cloud, True)
+    vis.add_geometry(combined_point_cloud, False)
 
     t0 = time.perf_counter_ns()
     global run
@@ -424,16 +426,17 @@ def main(args):
                                                      wide_stereo_baseline,
                                                      camera_parameters.left_intrinsics.fx,
                                                      rectification_result)
+        wide_stereo_points_threshold = np.where(wide_stereo_points[:, :, 2:3] > 2.1, wide_stereo_points, [0, 0, 0])
 
         # only map z-component of wide_stereo_points map
-        depth_colormapped = cv.applyColorMap(MAP_DEPTH_M_TO_BYTE(wide_stereo_points).astype(np.uint8)[:, :, 2:3],
+        depth_colormapped = cv.applyColorMap(MAP_DEPTH_M_TO_BYTE(wide_stereo_points_threshold).astype(np.uint8)[:, :, 2:3],
                                              cv.COLORMAP_JET)
-        new_wide_point_cloud = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(wide_stereo_points.reshape(-1, 3)))
-        new_wide_point_cloud.remove_non_finite_points()
+        new_wide_point_cloud = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(wide_stereo_points_threshold.reshape(-1, 3)))
         # try if this works, should work if order of points is kept intact
         new_wide_point_cloud.colors = o3d.utility.Vector3dVector(depth_colormapped.reshape(-1, 3))
-        copy_to_point_cloud(new_wide_point_cloud, wide_point_cloud)
-        vis.update_geometry(wide_point_cloud)
+
+        # copy_to_point_cloud(new_wide_point_cloud, wide_point_cloud)
+        # vis.update_geometry(wide_point_cloud)
 
         depth_at_cursor = wide_stereo_points[np.clip(MOUSE_Y, 0, 719), np.clip(MOUSE_X, 0, 1279), 2]
         distance_at_cursor = np.linalg.norm(wide_stereo_points[np.clip(MOUSE_Y, 0, 719), np.clip(MOUSE_X, 0, 1279)])
@@ -453,31 +456,46 @@ def main(args):
         # TODO color mapping, show wide_stereo_points streams, decimate native point clouds, integrate wide point cloud
         left_depth = np.asanyarray(left_frame.get_depth_frame().get_data())
         right_depth = np.asanyarray(right_frame.get_depth_frame().get_data())
+        left_depth_threshold = np.where(left_depth < 2200, left_depth, 0)
+        # right_depth_threshold = np.where(right_depth < 2200, right_depth, 0)
 
-        left_depth_colormap = cv.applyColorMap(MAP_DEPTH_MM_TO_BYTE(left_depth).astype(np.uint8), cv.COLORMAP_JET)
-        right_depth_colormap = cv.applyColorMap(MAP_DEPTH_MM_TO_BYTE(right_depth).astype(np.uint8), cv.COLORMAP_JET)
+        left_depth_colormap = cv.applyColorMap(MAP_DEPTH_MM_TO_BYTE(left_depth_threshold).astype(np.uint8), cv.COLORMAP_JET)
+        # right_depth_colormap = cv.applyColorMap(MAP_DEPTH_MM_TO_BYTE(right_depth_threshold).astype(np.uint8), cv.COLORMAP_JET)
 
         # show wide_stereo_points as BGR before converting to RGB, since imshow() expects BGR
         cv.imshow(WINDOW_NATIVE_LEFT, left_depth_colormap)
-        cv.imshow(WINDOW_NATIVE_RIGHT, left_depth_colormap)
+        # cv.imshow(WINDOW_NATIVE_RIGHT, right_depth_colormap)
 
         cv.cvtColor(left_depth_colormap, cv.COLOR_BGR2RGB, dst=left_depth_colormap)
-        cv.cvtColor(right_depth_colormap, cv.COLOR_BGR2RGB, dst=right_depth_colormap)
+        # cv.cvtColor(right_depth_colormap, cv.COLOR_BGR2RGB, dst=right_depth_colormap)
 
         # point cloud visuals
-        new_left_point_cloud = depth_to_point_cloud(left_depth,
+        new_left_point_cloud = depth_to_point_cloud(left_depth_threshold,
                                                     camera_parameters.left_pinhole_intrinsics,
                                                     point_cloud_transform_left,
                                                     colormap=left_depth_colormap)
-        new_right_point_cloud = depth_to_point_cloud(right_depth,
-                                                     camera_parameters.right_pinhole_intrinsics,
-                                                     point_cloud_transform_right,
-                                                     colormap=right_depth_colormap)
-        copy_to_point_cloud(new_left_point_cloud, left_point_cloud)
-        copy_to_point_cloud(new_right_point_cloud, right_point_cloud)
+        # new_right_point_cloud = depth_to_point_cloud(right_depth_threshold,
+        #                                              camera_parameters.right_pinhole_intrinsics,
+        #                                              point_cloud_transform_right,
+        #                                              colormap=right_depth_colormap)
+        # copy_to_point_cloud(new_left_point_cloud, left_point_cloud)
+        # copy_to_point_cloud(new_right_point_cloud, right_point_cloud)
 
-        vis.update_geometry(left_point_cloud)
-        vis.update_geometry(right_point_cloud)
+        # vis.update_geometry(left_point_cloud)
+        # vis.update_geometry(right_point_cloud)
+
+        # combine into one single way too big point cloud (naive)
+        all_points = new_left_point_cloud.points
+        # all_points.extend(new_right_point_cloud.points)
+        all_points.extend(new_wide_point_cloud.points)
+
+        all_colors = new_left_point_cloud.colors
+        # all_colors.extend(new_right_point_cloud.colors)
+        all_colors.extend(new_wide_point_cloud.colors)
+
+        combined_point_cloud.points = all_points
+        combined_point_cloud.colors = all_colors
+        vis.update_geometry(combined_point_cloud)
 
         key = cv.pollKey()
         if key != -1:
@@ -490,6 +508,10 @@ def main(args):
             cv.drawMarker(depth_colormapped, [MOUSE_X, MOUSE_Y], [0, 0, 0], cv.MARKER_SQUARE, markerSize=6, thickness=1)
             cv.imwrite(filename, depth_colormapped)
             print(f"Screenshot saved as {filename}")
+        if key == 112:  # p
+            filename = f"PointCloud_{datetime.datetime.now().strftime('%y-%m-%d_%H-%M-%S-%f')}.ply"
+            o3d.io.write_point_cloud(filename, combined_point_cloud)
+            print(f"Point-Cloud saved as {filename}")
 
         vis.update_renderer()
 
