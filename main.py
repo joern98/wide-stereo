@@ -1,12 +1,11 @@
 import argparse
 import os
-
 import time
 
 import cv2 as cv
 import numpy as np
-import pyrealsense2 as rs
 import open3d as o3d
+import pyrealsense2 as rs
 from scipy.interpolate import interp1d
 
 from device_utility.DeviceManager import DeviceManager, DevicePair
@@ -14,6 +13,8 @@ from device_utility.camera_calibration import run_camera_calibration, stereo_rec
     load_calibration_from_file, CalibrationResult
 from device_utility.utils import set_sensor_option, get_sensor_option
 from utility import CameraParameters, save_point_cloud, get_camera_parameters, save_screenshot
+
+from line_profiler_pycharm import profile
 
 # GLOBALS
 WINDOW_IR_L = "infrared left"
@@ -105,6 +106,7 @@ def change_exposure_time(value, device_pair: DevicePair):
     set_sensor_option(depth_sensor_right, rs.option.exposure, value)
 
 
+@profile
 def calculate_wide_stereo_depth(left: np.ndarray, right: np.ndarray, rectification: RectificationResult):
     global stereo_algorithm
     # omit rectification for now
@@ -118,6 +120,7 @@ def calculate_wide_stereo_depth(left: np.ndarray, right: np.ndarray, rectificati
     return depth
 
 
+@profile
 def wide_stereo_from_frames(left: rs.composite_frame, right: rs.composite_frame, baseline, focal_length,
                             rectification: RectificationResult):
     ir_frame_left: rs.video_frame = left.get_infrared_frame(1)  # left most IR stream
@@ -397,7 +400,8 @@ def main(args):
         wide_stereo_points_threshold = np.where(wide_stereo_points[:, :, 2:3] > 0.5, wide_stereo_points, [0, 0, 0])
 
         # Filter all the pixels where Z is equal to max Z, as these pixels represent invalid depths
-        wide_stereo_points_threshold = np.where(wide_stereo_points[:, :, 2:3] == wide_stereo_max_z, [0, 0, 0], wide_stereo_points)
+        wide_stereo_points_threshold = np.where(wide_stereo_points[:, :, 2:3] == wide_stereo_max_z, [0, 0, 0],
+                                                wide_stereo_points)
 
         # only map z-component of wide_stereo_points map
         depth_colormapped = cv.applyColorMap(
@@ -414,7 +418,8 @@ def main(args):
         new_wide_point_cloud = o3d.geometry.PointCloud(
             o3d.utility.Vector3dVector(wide_stereo_points_threshold.reshape(-1, 3)))
         # try if this works, should work if order of points is kept intact
-        cv.cvtColor(depth_colormapped, cv.COLOR_BGR2RGB, dst=depth_colormapped)  # Open3D expects RGB [0, 1], OpenCV uses BGR [0, 255]
+        cv.cvtColor(depth_colormapped, cv.COLOR_BGR2RGB,
+                    dst=depth_colormapped)  # Open3D expects RGB [0, 1], OpenCV uses BGR [0, 255]
         new_wide_point_cloud.colors = o3d.utility.Vector3dVector(depth_colormapped.reshape(-1, 3) / 0xFF)
 
         cv.putText(depth_colormapped, f"Depth/Distance: {depth_at_cursor:.3} / {distance_at_cursor:.3} m", (10, 40),
@@ -428,7 +433,6 @@ def main(args):
         if MOUSE_OVER_WINDOW != WINDOW_DEPTH:
             cv.drawMarker(depth_colormapped, [MOUSE_X, MOUSE_Y], [0, 0, 0], cv.MARKER_CROSS, markerSize=11, thickness=1)
         cv.imshow(WINDOW_DEPTH, depth_colormapped)
-
 
         # TODO color mapping, show wide_stereo_points streams, decimate native point clouds, integrate wide point cloud
         left_depth = np.asanyarray(left_frame.get_depth_frame().get_data())

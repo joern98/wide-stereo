@@ -8,3 +8,4 @@ ScreenCamera_*.json
 ScreenCapture_*.png
 /PointClouds/
 /Screenshots/
+/*.py.pclprof
