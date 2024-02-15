@@ -109,7 +109,6 @@ def change_exposure_time(value, device_pair: DevicePair):
 @profile
 def calculate_wide_stereo_depth(left: np.ndarray, right: np.ndarray, rectification: RectificationResult):
     global stereo_algorithm
-    # omit rectification for now
     disp = stereo_algorithm.compute(left, right).astype(np.float32) / 16.0
 
     # disp to depth using formula d=fb/z <=> z=fb/d
@@ -334,26 +333,32 @@ def main(args):
     else:
         calibration_result, rectification_result = run_camera_calibration(device_pair)
 
+    vis = setup_gui(device_pair)
+
+    main_loop(calibration_result, device_pair, rectification_result, vis)
+
+    vis.close()
+    vis.destroy_window()
+    cv.destroyAllWindows()
+    print("Waiting for device pipelines to close...")
+    device_pair.stop()
+
+
+@profile
+def main_loop(calibration_result, device_pair, rectification_result, vis):
     # we only need ir streams -> even only the outer streams
     # wide_stereo_points necessary to get intrinsics, although those could be gotten from ir streams as well
     device_pair.start(1280, 720, 15, streams=(rs.stream.infrared, rs.stream.depth))
-
     camera_parameters = get_camera_parameters(device_pair)
-
     wide_stereo_baseline = calibration_result.T[0, 0] if calibration_result.R_14 is None else calibration_result.R_14[
         0, 3]
     print(f"Left camera intrinsic parameters: {camera_parameters.left_intrinsics}")
     print(f"wide baseline: {wide_stereo_baseline:.4} m")
-
     device_offset_transform = compute_device_offset_transform(camera_parameters, calibration_result)
-
-    vis = setup_gui(device_pair)
-
     # identity matrix with Y and Z flipped, left is origin
     # multiply right with left transform to flip Y [and Z] don't flip z, to be compatible with wide stereo
     point_cloud_transform_left = np.matrix("1 0 0 0;0 1 0 0; 0 0 1 0; 0 0 0 1")
     point_cloud_transform_right = device_offset_transform @ point_cloud_transform_left
-
     # we don't need the colormap in this step
     # create initial point clouds to be added to the scene
     left_frame, right_frame = device_pair.wait_for_frames()
@@ -363,22 +368,17 @@ def main(args):
     right_point_cloud = depth_to_point_cloud(np.asanyarray(right_frame.get_depth_frame().get_data()),
                                              camera_parameters.right_pinhole_intrinsics,
                                              point_cloud_transform_right)
-
     wide_stereo_points = wide_stereo_from_frames(left_frame,
                                                  right_frame,
                                                  wide_stereo_baseline,
                                                  camera_parameters.left_intrinsics.fx,
                                                  rectification_result)
-
     wide_point_cloud = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(wide_stereo_points.reshape(-1, 3)))
-
     combined_point_cloud = o3d.geometry.PointCloud()
-
     # vis.add_geometry(left_point_cloud, True)
     # vis.add_geometry(right_point_cloud, True)
     # vis.add_geometry(wide_point_cloud, True)
     vis.add_geometry(combined_point_cloud, False)
-
     t0 = time.perf_counter_ns()
     global run
     while run:
@@ -400,7 +400,7 @@ def main(args):
         wide_stereo_points_threshold = np.where(wide_stereo_points[:, :, 2:3] > 0.5, wide_stereo_points, [0, 0, 0])
 
         # Filter all the pixels where Z is equal to max Z, as these pixels represent invalid depths
-        wide_stereo_points_threshold = np.where(wide_stereo_points[:, :, 2:3] == wide_stereo_max_z, [0, 0, 0],
+        wide_stereo_points_threshold = np.where(wide_stereo_points_threshold[:, :, 2:3] == wide_stereo_max_z, [0, 0, 0],
                                                 wide_stereo_points)
 
         # only map z-component of wide_stereo_points map
@@ -494,12 +494,6 @@ def main(args):
             run = False
 
         vis.update_renderer()
-
-    vis.close()
-    vis.destroy_window()
-    cv.destroyAllWindows()
-    print("Waiting for device pipelines to close...")
-    device_pair.stop()
 
 
 if __name__ == '__main__':
