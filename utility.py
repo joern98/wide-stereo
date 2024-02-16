@@ -23,9 +23,9 @@ class CameraParameters:
     image_size: Tuple[int, int]
 
 
-def save_point_cloud(pc: o3d.geometry.PointCloud):
+def save_point_cloud(pc: o3d.geometry.PointCloud, filename_prefix: str = "PointCloud"):
     POINT_CLOUD_SAVE_DIR = os.path.join("PointClouds")
-    filename = f"PointCloud_{datetime.datetime.now().strftime('%y-%m-%d_%H-%M-%S-%f')}.ply"
+    filename = f"{filename_prefix}_{datetime.datetime.now().strftime('%y-%m-%d_%H-%M-%S-%f')}.ply"
     filepath = os.path.join(POINT_CLOUD_SAVE_DIR, filename)
     o3d.io.write_point_cloud(filepath, pc)
     print(f"Point-Cloud saved to {filepath}")

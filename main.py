@@ -437,7 +437,8 @@ def main_loop(calibration_result, device_pair, rectification_result, vis):
         # TODO color mapping, show wide_stereo_points streams, decimate native point clouds, integrate wide point cloud
         left_depth = np.asanyarray(left_frame.get_depth_frame().get_data())
         right_depth = np.asanyarray(right_frame.get_depth_frame().get_data())
-        left_depth_threshold = np.where(left_depth < 2200, left_depth, 0)
+        # left_depth_threshold = np.where(left_depth < 2200, left_depth, 0)
+        left_depth_threshold = left_depth
         # right_depth_threshold = np.where(right_depth < 2200, right_depth, 0)
 
         left_depth_colormap = cv.applyColorMap(MAP_DEPTH_MM_TO_BYTE(left_depth_threshold).astype(np.uint8),
@@ -487,7 +488,9 @@ def main_loop(calibration_result, device_pair, rectification_result, vis):
             if key == 115:  # s
                 save_screenshot(depth_colormapped, (MOUSE_X, MOUSE_Y))
             if key == 112:  # p
-                save_point_cloud(combined_point_cloud)
+                save_point_cloud(combined_point_cloud, "Combined")
+                save_point_cloud(new_wide_point_cloud, "WideStereo")
+                save_point_cloud(new_left_point_cloud, "LeftNative")
 
         if not vis.poll_events():
             # poll_events returns false of window should close (X was clicked)
