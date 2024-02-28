@@ -43,6 +43,40 @@ def set_device_options(device_pair: DevicePair):
     set_sensor_option(depth_sensor_right, rs.option.enable_auto_exposure, 0)
 
 
+def write_images(left_frame: rs.composite_frame, right_frame: rs.composite_frame, parent_dir):
+    left_depth = np.asanyarray(left_frame.get_depth_frame().get_data())
+    right_depth = np.asanyarray(right_frame.get_depth_frame().get_data())
+
+    left_depth_color = cv.applyColorMap(MAP_DEPTH_MM_TO_BYTE(left_depth).astype(np.uint8), cv.COLORMAP_JET)
+    right_depth_color = cv.applyColorMap(MAP_DEPTH_MM_TO_BYTE(right_depth).astype(np.uint8), cv.COLORMAP_JET)
+
+    left_ir_1 = np.asanyarray(left_frame.get_infrared_frame(1).get_data())
+    left_ir_2 = np.asanyarray(left_frame.get_infrared_frame(2).get_data())
+
+    right_ir_1 = np.asanyarray(right_frame.get_infrared_frame(1).get_data())
+    right_ir_2 = np.asanyarray(right_frame.get_infrared_frame(2).get_data())
+
+    join = os.path.join
+    fn_left_depth_raw = join(parent_dir, f"left_depth_raw.npy")
+    fn_right_depth_raw = join(parent_dir, f"right_depth_raw.npy")
+    fn_left_depth_color = join(parent_dir, f"left_depth_color.png")
+    fn_right_depth_color = join(parent_dir, f"right_depth_color.png")
+    fn_left_ir_1 = join(parent_dir, f"left_ir_1.png")
+    fn_left_ir_2 = join(parent_dir, f"left_ir_2.png")
+    fn_right_ir_1 = join(parent_dir, f"right_ir_1.png")
+    fn_right_ir_2 = join(parent_dir, f"right_ir_2.png")
+
+    np.save(fn_left_depth_raw, left_depth)
+    np.save(fn_right_depth_raw, right_depth)
+    cv.imwrite(fn_left_depth_color, left_depth_color)
+    cv.imwrite(fn_left_ir_1, left_ir_1)
+    cv.imwrite(fn_left_ir_2, left_ir_2)
+    cv.imwrite(fn_right_depth_color, right_depth_color)
+    cv.imwrite(fn_right_ir_1, right_ir_1)
+    cv.imwrite(fn_right_ir_2, right_ir_2)
+
+    print(f"Written output files to {parent_dir}")
+
 def main(args):
     ctx = rs.context()
     device_manager = DeviceManager(ctx)
@@ -72,11 +106,7 @@ def main(args):
     cv.namedWindow(WINDOW_DEPTH_LEFT)
     cv.namedWindow(WINDOW_DEPTH_RIGHT)
 
-    timestamp = datetime.now().strftime('%y%m%d_%H%M%S')
-    parent_dir = f"RECORDING_{timestamp}"
-    os.mkdir(parent_dir)
-
-    device_pair.start(WIDTH, HEIGHT, FPS, streams=(rs.stream.infrared, rs.stream.depth), record_to_directory=parent_dir)
+    device_pair.start(WIDTH, HEIGHT, FPS, streams=(rs.stream.infrared, rs.stream.depth))
     run = True
     while run:
         left_frame, right_frame = device_pair.wait_for_frames()
@@ -92,9 +122,14 @@ def main(args):
         key = cv.pollKey()
         if key == 27:  # ESCAPE
             run = False
+        if key == 115:  # s
+            timestamp = datetime.now().strftime('%y%m%d_%H%M%S')
+            parent_dir = f"CAPTURE_{timestamp}"
+            os.mkdir(parent_dir)
+            write_images(left_frame, right_frame, parent_dir)
+            write_calibration_to_file(calibration_result, os.path.join(parent_dir, "Calibration"))
 
     cv.destroyAllWindows()
-    write_calibration_to_file(calibration_result, os.path.join(parent_dir, "Calibration"))
     device_pair.stop()
 
 
