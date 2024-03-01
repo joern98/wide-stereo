@@ -9,3 +9,4 @@ ScreenCapture_*.png
 /PointClouds/
 /Screenshots/
 /*.py.pclprof
+CAPTURE*/
