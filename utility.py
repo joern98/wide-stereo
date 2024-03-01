@@ -57,9 +57,9 @@ def intrinsics_to_o3d_pinhole_intrinsic(intrinsic: rs.intrinsics):
                                              fy=intrinsic.fy)
 
 
-def save_screenshot(image: np.ndarray, mouse_position=(0, 0)):
+def save_screenshot(image: np.ndarray, mouse_position=(0, 0), filename_prefix="Screenshot"):
     SCREENSHOT_SAVE_DIR = os.path.join("Screenshots")
-    filename = f"Screenshot_{datetime.datetime.now().strftime('%y-%m-%d_%H-%M-%S-%f')}.png"
+    filename = f"{filename_prefix}_{datetime.datetime.now().strftime('%y-%m-%d_%H-%M-%S-%f')}.png"
     # add marker at mouse position to the saved image
     cv.drawMarker(image, mouse_position, [0, 0, 0], cv.MARKER_SQUARE, markerSize=6, thickness=1)
     filepath = os.path.join(SCREENSHOT_SAVE_DIR, filename)
