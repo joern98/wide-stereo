@@ -486,7 +486,7 @@ def main_loop(calibration_result, device_pair, rectification_result, vis):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(prog="Wide-baseline stereo implementation")
+    parser = argparse.ArgumentParser(prog="Realtime Wide-baseline stereo implementation")
     parser.add_argument("-c", "--calibration", help=".npy file containing the numpy-serialized calibration data")
     args = parser.parse_args()
     main(args)
