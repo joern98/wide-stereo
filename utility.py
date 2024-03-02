@@ -13,7 +13,7 @@ from device_utility.utils import get_stereo_extrinsic
 
 
 @dataclass()
-class CameraParameters:
+class CameraParametersWithPinhole:
     left_intrinsics: rs.intrinsics
     right_intrinsics: rs.intrinsics
     left_pinhole_intrinsics: o3d.camera.PinholeCameraIntrinsic
@@ -42,10 +42,10 @@ def get_camera_parameters(device_pair):
 
     left_stereo_extrinsic = get_stereo_extrinsic(device_pair.left.pipeline_profile)
     right_stereo_extrinsic = get_stereo_extrinsic(device_pair.right.pipeline_profile)
-    return CameraParameters(left_intrinsic, right_intrinsic,
-                            left_pinhole_intrinsics, right_pinhole_intrinsics,
-                            left_stereo_extrinsic, right_stereo_extrinsic,
-                            (left_intrinsic.width, left_intrinsic.height))
+    return CameraParametersWithPinhole(left_intrinsic, right_intrinsic,
+                                       left_pinhole_intrinsics, right_pinhole_intrinsics,
+                                       left_stereo_extrinsic, right_stereo_extrinsic,
+                                       (left_intrinsic.width, left_intrinsic.height))
 
 
 def intrinsics_to_o3d_pinhole_intrinsic(intrinsic: rs.intrinsics):

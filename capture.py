@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 from datetime import datetime
 
@@ -12,6 +13,7 @@ from device_utility.DevicePair import DevicePair
 from device_utility.camera_calibration import load_calibration_from_file, stereo_rectify, run_camera_calibration, \
     write_calibration_to_file
 from device_utility.utils import set_sensor_option
+from utility import CameraParametersWithPinhole, get_camera_parameters
 
 WINDOW_DEPTH_LEFT = "depth left"
 WINDOW_DEPTH_RIGHT = "depth right"
@@ -21,6 +23,7 @@ HEIGHT = 720
 FPS = 15
 
 MAP_DEPTH_MM_TO_BYTE = interp1d([0, 13000], [0, 255], bounds_error=False, fill_value=(0, 255))
+
 
 def set_device_options(device_pair: DevicePair):
     depth_sensor_left: rs.depth_sensor = device_pair.left.device.first_depth_sensor()
@@ -77,24 +80,42 @@ def write_images(left_frame: rs.composite_frame, right_frame: rs.composite_frame
 
     print(f"Written output files to {parent_dir}")
 
+
+def write_camera_parameters(camera_parameters: CameraParametersWithPinhole, file_basename):
+    r = {
+        "left_intrinsics": {
+            "fx": camera_parameters.left_intrinsics.fx,
+            "fy": camera_parameters.left_intrinsics.fy,
+            "coeffs": camera_parameters.left_intrinsics.coeffs,
+            "ppx": camera_parameters.left_intrinsics.ppx,
+            "ppy": camera_parameters.left_intrinsics.ppy,
+        },
+        "right_intrinsics": {
+            "fx": camera_parameters.right_intrinsics.fx,
+            "fy": camera_parameters.right_intrinsics.fy,
+            "coeffs": camera_parameters.right_intrinsics.coeffs,
+            "ppx": camera_parameters.right_intrinsics.ppx,
+            "ppy": camera_parameters.right_intrinsics.ppy,
+        },
+        "left_stereo_extrinsics": {
+            "t": camera_parameters.left_stereo_extrinsic.translation,
+            "r": camera_parameters.left_stereo_extrinsic.rotation
+        },
+        "right_stereo_extrinsics": {
+            "t": camera_parameters.right_stereo_extrinsic.translation,
+            "r": camera_parameters.right_stereo_extrinsic.rotation
+        },
+        "image_size": camera_parameters.image_size
+    }
+    with open(file_basename + ".json", "x") as f:
+        json.dump(r, f, indent=2)
+        print(f"Written camera parameters to file: {file_basename + '.json'}")
+
+
 def main(args):
     ctx = rs.context()
     device_manager = DeviceManager(ctx)
-    if device_manager.device_count(ctx) != 2:
-        raise Exception(f"Unexpected number of devices (expected 2): {device_manager.device_count(ctx)}")
-    try:
-        left_serial = os.environ.get("RS_LEFT_SERIAL")
-        right_serial = os.environ.get("RS_RIGHT_SERIAL")
-        if left_serial and right_serial is not None:
-            print(f"'RS_LEFT_SERIAL' and 'RS_RIGHT_SERIAL' environment variables are set:\n"
-                  f"Left Device: {left_serial}\nRight Device: {right_serial}")
-        else:
-            left_serial, right_serial = DeviceManager.serial_selection()
-    except Exception as e:
-        print("Serial selection failed: \n", e)
-        return
-
-    device_pair = device_manager.create_device_pair(left_serial, right_serial)
+    device_pair = device_manager.create_device_pair_interactive()
     set_device_options(device_pair)
 
     if args.calibration:
@@ -107,6 +128,7 @@ def main(args):
     cv.namedWindow(WINDOW_DEPTH_RIGHT)
 
     device_pair.start(WIDTH, HEIGHT, FPS, streams=(rs.stream.infrared, rs.stream.depth))
+    camera_parameters = get_camera_parameters(device_pair)
     run = True
     while run:
         left_frame, right_frame = device_pair.wait_for_frames()
@@ -128,6 +150,7 @@ def main(args):
             os.mkdir(parent_dir)
             write_images(left_frame, right_frame, parent_dir)
             write_calibration_to_file(calibration_result, os.path.join(parent_dir, "Calibration"))
+            write_camera_parameters(camera_parameters, os.path.join(parent_dir, "CameraParameters"))
 
     cv.destroyAllWindows()
     device_pair.stop()

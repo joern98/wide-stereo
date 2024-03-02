@@ -12,7 +12,7 @@ from device_utility.DeviceManager import DeviceManager, DevicePair
 from device_utility.camera_calibration import run_camera_calibration, stereo_rectify, RectificationResult, \
     load_calibration_from_file, CalibrationResult
 from device_utility.utils import set_sensor_option, get_sensor_option
-from utility import CameraParameters, save_point_cloud, get_camera_parameters, save_screenshot
+from utility import CameraParametersWithPinhole, save_point_cloud, get_camera_parameters, save_screenshot
 
 from line_profiler_pycharm import profile
 
@@ -255,7 +255,7 @@ def setup_gui(device_pair):
     return vis
 
 
-def compute_device_offset_transform(camera_params: CameraParameters, calib: CalibrationResult):
+def compute_device_offset_transform(camera_params: CameraParametersWithPinhole, calib: CalibrationResult):
     """
     Return the 4x4 transformation matrix R_13=(R|t) in homogenous coordinates
     :param camera_params:
@@ -310,21 +310,7 @@ def copy_to_point_cloud(source: o3d.geometry.PointCloud, target: o3d.geometry.Po
 def main(args):
     ctx = rs.context()
     device_manager = DeviceManager(ctx)
-    if device_manager.device_count(ctx) != 2:
-        raise Exception(f"Unexpected number of devices (expected 2): {device_manager.device_count(ctx)}")
-    try:
-        left_serial = os.environ.get("RS_LEFT_SERIAL")
-        right_serial = os.environ.get("RS_RIGHT_SERIAL")
-        if left_serial and right_serial is not None:
-            print(f"'RS_LEFT_SERIAL' and 'RS_RIGHT_SERIAL' environment variables are set:\n"
-                  f"Left Device: {left_serial}\nRight Device: {right_serial}")
-        else:
-            left_serial, right_serial = DeviceManager.serial_selection()
-    except Exception as e:
-        print("Serial selection failed: \n", e)
-        return
-
-    device_pair = device_manager.create_device_pair(left_serial, right_serial)
+    device_pair = device_manager.create_device_pair_interactive()
     set_device_options(device_pair)
 
     if args.calibration:
