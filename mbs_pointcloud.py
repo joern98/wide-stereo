@@ -6,7 +6,7 @@ import numpy as np
 from scipy.interpolate import interp1d
 import open3d as o3d
 
-from device_utility.camera_calibration import load_calibration_from_file
+from device_utility.camera_calibration import load_calibration_from_file, stereo_rectify
 from utility import save_point_cloud
 
 WINDOW_LEFT_IR_1 = "left IR 1"
@@ -14,13 +14,12 @@ WINDOW_LEFT_IR_2 = "left IR 2"
 WINDOW_RIGHT_IR_1 = "right IR 1"
 WINDOW_RIGHT_IR_2 = "right IR 2"
 WINDOW_DEPTH_LEFT = "left depth"
+WINDOW_DEPTH_WIDE = "wide depth"
 
-MAP_DEPTH_M_TO_BYTE = interp1d([0, 3], [0, 255], bounds_error=False, fill_value=(0, 255))
+MAP_DEPTH_M_TO_BYTE = interp1d([0, 10], [0, 255], bounds_error=False, fill_value=(0, 255))
 
 KEY_ESCAPE = 256
 KEY_SPACE = 32
-
-
 
 
 def reset_view(vis: o3d.visualization.Visualizer, action, mod):
@@ -37,7 +36,9 @@ def reset_view(vis: o3d.visualization.Visualizer, action, mod):
     return True
 
 
-def load_data(directory):
+def load_data(directory: str):
+    if directory is None or directory == "":
+        raise Exception("Directory not given")
     calibration = load_calibration_from_file(path.join(directory, "Calibration.npy"))
     with open(path.join(directory, "CameraParameters.json")) as f:
         camera_parameters = json.load(f)
@@ -58,7 +59,7 @@ def depth_to_point_cloud(depth: np.ndarray, intrinsic, extrinsic,
         depth_rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(color=depth_colormap_image,
                                                                               depth=depth_image,
                                                                               depth_trunc=20,
-                                                                              depth_scale=1000,
+                                                                              depth_scale=1,
                                                                               convert_rgb_to_intensity=False)
         pc = o3d.geometry.PointCloud.create_from_rgbd_image(depth_rgbd_image, intrinsic, extrinsic)
     else:
@@ -66,7 +67,7 @@ def depth_to_point_cloud(depth: np.ndarray, intrinsic, extrinsic,
         pc = o3d.geometry.PointCloud.create_from_depth_image(depth_image,
                                                              intrinsic,
                                                              extrinsic,
-                                                             depth_scale=1000,
+                                                             depth_scale=1,
                                                              depth_trunc=20)
     return pc
 
@@ -80,7 +81,6 @@ def create_pinhole_intrinsic_from_dict(intrinsic_dict, image_size):
                                              fy=intrinsic_dict["fy"])
 
 
-
 def main(args):
     calibration_result, camera_parameters, left_ir_1, left_ir_2, right_ir_1, right_ir_2 = load_data(args.directory)
 
@@ -91,7 +91,7 @@ def main(args):
     cv.imshow(WINDOW_RIGHT_IR_2, right_ir_2)
 
     stereo95 = cv.StereoSGBM.create(
-        minDisparity=0,
+        minDisparity=1,
         numDisparities=16 * 4,
         blockSize=3,
         P1=100,
@@ -101,27 +101,67 @@ def main(args):
         uniquenessRatio=5,
         speckleWindowSize=64,
         speckleRange=1,
-        mode=cv.STEREO_SGBM_MODE_HH
-
+        mode=cv.STEREO_SGBM_MODE_SGBM
     )
 
-    # compute stereo
+    # compute stereo left device
     disp95 = stereo95.compute(left_ir_1, left_ir_2).astype(np.float32) / 16.0
     b95 = abs(camera_parameters["left_stereo_extrinsics"]["t"][0])
     f95 = camera_parameters["left_intrinsics"]["fx"]
     bf95 = b95 * f95
     depth95 = bf95 / disp95
 
-    depth_color = cv.applyColorMap(MAP_DEPTH_M_TO_BYTE(depth95).astype(np.uint8), cv.COLORMAP_JET)
-    cv.imshow(WINDOW_DEPTH_LEFT, depth_color)
+    depth95_color = cv.applyColorMap(MAP_DEPTH_M_TO_BYTE(depth95).astype(np.uint8), cv.COLORMAP_JET)
+    cv.imshow(WINDOW_DEPTH_LEFT, depth95_color)
+
+    stereo285 = cv.StereoSGBM.create(
+        minDisparity=1,
+        numDisparities=16 * 8,
+        blockSize=3,
+        P1=100,
+        P2=400,
+        disp12MaxDiff=4,
+        preFilterCap=1,
+        uniquenessRatio=5,
+        speckleWindowSize=64,
+        speckleRange=1,
+        mode=cv.STEREO_SGBM_MODE_HH
+    )
+
+    # compute stereo wide
+    # rectify first
+    rectification = stereo_rectify(image_size=camera_parameters["image_size"], calib=calibration_result)
+    left_rectified = cv.remap(left_ir_1,
+                              rectification.left_map_x,
+                              rectification.left_map_y,
+                              interpolation=cv.INTER_LANCZOS4,
+                              borderMode=cv.BORDER_CONSTANT,
+                              borderValue=(0, 0, 0))
+    right_rectified = cv.remap(right_ir_2,
+                               rectification.right_map_x,
+                               rectification.right_map_y,
+                               interpolation=cv.INTER_LANCZOS4,
+                               borderMode=cv.BORDER_CONSTANT,
+                               borderValue=(0, 0, 0))
+    disp285 = stereo285.compute(left_rectified, right_rectified).astype(np.float32) / 16.0
+    points285 = cv.reprojectImageTo3D(disp285, rectification.Q, handleMissingValues=True)
+    depth285_color = cv.applyColorMap(
+        MAP_DEPTH_M_TO_BYTE(points285).astype(np.uint8)[:, :, 2:3],
+        cv.COLORMAP_JET)
+    cv.imshow(WINDOW_DEPTH_WIDE, depth285_color)
+
+    points285_flat = points285.reshape(-1, 3)
+    invalid_indices = np.nonzero(points285_flat[:, 2:3] == 10000)  # find indices where reprojectImageTo3D() has set Z to 10000 to mark invalid point
+    points285_valid_only = np.delete(points285_flat, invalid_indices[0], 0)
 
     def on_mouse(event, x, y, flags, user_data):
         if event == cv.EVENT_MOUSEMOVE:
-            print(f"depth at cursor: {depth95[y, x]} m")
+            print(f"left depth: {depth95[y, x]} m | wide depth: {points285[y, x, 2]} m | diff: {depth95[y, x] - points285[y, x, 2]}")
 
     run = True
 
     cv.setMouseCallback(WINDOW_DEPTH_LEFT, on_mouse)
+    cv.setMouseCallback(WINDOW_DEPTH_WIDE, on_mouse)
 
     def vis_close(vis, action, mod):
         nonlocal run
@@ -132,14 +172,19 @@ def main(args):
     identity4 = np.eye(4)
     pinhole_intrinsics = create_pinhole_intrinsic_from_dict(camera_parameters["left_intrinsics"],
                                                             camera_parameters["image_size"])
-    point_cloud = depth_to_point_cloud(depth95, pinhole_intrinsics, identity4, depth_color)
+    point_cloud95 = depth_to_point_cloud(depth95, pinhole_intrinsics, identity4, depth95_color)
+    point_cloud285 = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(points285_valid_only.reshape(-1, 3)))
+    # cv.cvtColor(depth285_color, cv.COLOR_BGR2RGB,
+    #             dst=depth285_color)  # Open3D expects RGB [0, 1], OpenCV uses BGR [0, 255]
+    # point_cloud285.colors = o3d.utility.Vector3dVector(depth285_color.reshape(-1, 3) / 0xFF)
 
     while run:
         key = cv.waitKey(1)
         if key == 27:  # ESCAPE
             run = False
         if key == 115:  # s
-            save_point_cloud(point_cloud, path.join(f"PointCloud_Left_CV"))
+            save_point_cloud(point_cloud95, "PointCloud_Left_CV")
+            save_point_cloud(point_cloud285, "PointCloud_Wide_CV")
 
     cv.destroyAllWindows()
 

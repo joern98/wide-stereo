@@ -315,7 +315,7 @@ def main(args):
 
     if args.calibration:
         calibration_result = load_calibration_from_file(args.calibration)
-        rectification_result = stereo_rectify(device_pair, calibration_result.image_size, calibration_result)
+        rectification_result = stereo_rectify(calibration_result.image_size, calibration_result)
     else:
         calibration_result, rectification_result = run_camera_calibration(device_pair)
 
