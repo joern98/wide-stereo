@@ -93,9 +93,9 @@ def main(args):
     stereo95 = cv.StereoSGBM.create(
         minDisparity=0,
         numDisparities=16 * 4,
-        blockSize=5,
-        P1=300,
-        P2=1000,
+        blockSize=3,
+        P1=100,
+        P2=400,
         disp12MaxDiff=4,
         preFilterCap=1,
         uniquenessRatio=5,
