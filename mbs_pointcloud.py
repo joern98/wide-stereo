@@ -1,6 +1,9 @@
 import argparse
 import json
+import os.path
 import os.path as path
+from datetime import datetime
+
 import cv2 as cv
 import numpy as np
 from scipy.interpolate import interp1d
@@ -46,8 +49,10 @@ def load_data(directory: str):
     left_ir_2 = cv.imread(path.join(directory, "left_ir_2.png"))
     right_ir_1 = cv.imread(path.join(directory, "right_ir_1.png"))
     right_ir_2 = cv.imread(path.join(directory, "right_ir_2.png"))
+    left_depth = np.load(path.join(directory, "left_depth_raw.npy"))
+    right_depth = np.load(path.join(directory, "right_depth_raw.npy"))
 
-    return calibration, camera_parameters, left_ir_1, left_ir_2, right_ir_1, right_ir_2
+    return calibration, camera_parameters, left_ir_1, left_ir_2, right_ir_1, right_ir_2, left_depth, right_depth
 
 
 def depth_to_point_cloud(depth: np.ndarray, intrinsic, extrinsic,
@@ -81,8 +86,23 @@ def create_pinhole_intrinsic_from_dict(intrinsic_dict, image_size):
                                              fy=intrinsic_dict["fy"])
 
 
+OUTPUT_DIRECTORY = None
+
+
+def ensure_output_directory(root_directory):
+    global OUTPUT_DIRECTORY
+    if OUTPUT_DIRECTORY is None:
+        timestamp = datetime.now().strftime('%y%m%d_%H%M%S')
+        pathname = path.join(root_directory, f"Output_{timestamp}")
+        os.mkdir(pathname)
+        OUTPUT_DIRECTORY = pathname
+    return OUTPUT_DIRECTORY
+
+
 def main(args):
-    calibration_result, camera_parameters, left_ir_1, left_ir_2, right_ir_1, right_ir_2 = load_data(args.directory)
+    calibration_result, camera_parameters, \
+        left_ir_1, left_ir_2, right_ir_1, right_ir_2, \
+        left_native_depth, right_native_depth = load_data(args.directory)
 
     # show raw infrared images
     cv.imshow(WINDOW_LEFT_IR_1, left_ir_1)
@@ -151,12 +171,15 @@ def main(args):
     cv.imshow(WINDOW_DEPTH_WIDE, depth285_color)
 
     points285_flat = points285.reshape(-1, 3)
-    invalid_indices = np.nonzero(points285_flat[:, 2:3] == 10000)  # find indices where reprojectImageTo3D() has set Z to 10000 to mark invalid point
+    invalid_indices = np.nonzero(points285_flat[:,
+                                 2:3] == 10000)  # find indices where reprojectImageTo3D() has set Z to 10000 to mark invalid point
     points285_valid_only = np.delete(points285_flat, invalid_indices[0], 0)
 
     def on_mouse(event, x, y, flags, user_data):
         if event == cv.EVENT_MOUSEMOVE:
-            print(f"left depth: {depth95[y, x]} m | wide depth: {points285[y, x, 2]} m | diff: {depth95[y, x] - points285[y, x, 2]}")
+            print(
+                f"left depth: {depth95[y, x]} m | wide depth: {points285[y, x, 2]} m | diff: {depth95[y, x] - points285[y, x, 2]} | left native "
+                f"depth: {left_native_depth[y, x] / 1000} m")
 
     run = True
 
@@ -168,6 +191,9 @@ def main(args):
         run = False
         vis.destroy_window()
         return False
+
+    def output_dir():
+        return ensure_output_directory(args.directory)
 
     identity4 = np.eye(4)
     pinhole_intrinsics = create_pinhole_intrinsic_from_dict(camera_parameters["left_intrinsics"],
@@ -182,15 +208,18 @@ def main(args):
         key = cv.waitKey(1)
         if key == 27:  # ESCAPE
             run = False
-        if key == 115:  # s
-            save_point_cloud(point_cloud95, "PointCloud_Left_CV")
-            save_point_cloud(point_cloud285, "PointCloud_Wide_CV")
+        if key == ord('p'):
+            save_point_cloud(point_cloud95, "PointCloud_Left_CV", output_directory=output_dir())
+            save_point_cloud(point_cloud285, "PointCloud_Wide_CV", output_directory=output_dir())
+        if key == ord('s'):
+            cv.imwrite(path.join(output_dir(), "Depth_Narrow.png"), depth95_color)
+            cv.imwrite(path.join(output_dir(), "Depth_Wide.png"), depth285_color)
 
     cv.destroyAllWindows()
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog="Implementation approach working on a captured snapshot (see capture.py)")
-    parser.add_argument("directory", help="Path to the capture directory as it was created by capture.py")
+    parser.add_argument("directory", help="Path to the directory created by capture.py")
     args = parser.parse_args()
     main(args)
