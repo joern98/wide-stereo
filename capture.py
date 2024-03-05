@@ -12,15 +12,15 @@ from device_utility.DeviceManager import DeviceManager
 from device_utility.DevicePair import DevicePair
 from device_utility.camera_calibration import load_calibration_from_file, stereo_rectify, run_camera_calibration, \
     write_calibration_to_file
-from device_utility.utils import set_sensor_option
+from device_utility.utils import set_sensor_option, get_sensor_option
 from utility import CameraParametersWithPinhole, get_camera_parameters
 
-WINDOW_DEPTH_LEFT = "depth left"
-WINDOW_DEPTH_RIGHT = "depth right"
+WINDOW_LEFT = "left"
+WINDOW_RIGHT = "right"
 
 WIDTH = 1280
 HEIGHT = 720
-FPS = 15
+FPS = 30
 
 MAP_DEPTH_MM_TO_BYTE = interp1d([0, 13000], [0, 255], bounds_error=False, fill_value=(0, 255))
 
@@ -112,6 +112,13 @@ def write_camera_parameters(camera_parameters: CameraParametersWithPinhole, file
         print(f"Written camera parameters to file: {file_basename + '.json'}")
 
 
+def change_exposure_time(value, device_pair: DevicePair):
+    depth_sensor_left: rs.depth_sensor = device_pair.left.device.first_depth_sensor()
+    depth_sensor_right: rs.depth_sensor = device_pair.right.device.first_depth_sensor()
+    set_sensor_option(depth_sensor_left, rs.option.exposure, value)
+    set_sensor_option(depth_sensor_right, rs.option.exposure, value)
+
+
 def main(args):
     ctx = rs.context()
     device_manager = DeviceManager(ctx)
@@ -124,8 +131,11 @@ def main(args):
     else:
         calibration_result, rectification_result = run_camera_calibration(device_pair)
 
-    cv.namedWindow(WINDOW_DEPTH_LEFT)
-    cv.namedWindow(WINDOW_DEPTH_RIGHT)
+    cv.namedWindow(WINDOW_LEFT)
+    cv.namedWindow(WINDOW_RIGHT)
+    cv.createTrackbar("exposure time", WINDOW_LEFT, 0, 166000, lambda v: change_exposure_time(v, device_pair))
+    cv.setTrackbarPos("exposure time", WINDOW_LEFT,
+                      int(get_sensor_option(device_pair.left.device.first_depth_sensor(), rs.option.exposure)))
 
     device_pair.start(WIDTH, HEIGHT, FPS, streams=(rs.stream.infrared, rs.stream.depth))
     camera_parameters = get_camera_parameters(device_pair)
@@ -133,13 +143,11 @@ def main(args):
     while run:
         left_frame, right_frame = device_pair.wait_for_frames()
 
-        left_depth = np.asanyarray(left_frame.get_depth_frame().get_data())
-        left_depth_color = cv.applyColorMap(MAP_DEPTH_MM_TO_BYTE(left_depth).astype(np.uint8), cv.COLORMAP_JET)
-        right_depth = np.asanyarray(right_frame.get_depth_frame().get_data())
-        right_depth_color = cv.applyColorMap(MAP_DEPTH_MM_TO_BYTE(right_depth).astype(np.uint8), cv.COLORMAP_JET)
+        left_ir = np.asanyarray(left_frame.get_infrared_frame(1).get_data())
+        right_ir = np.asanyarray(right_frame.get_infrared_frame(2).get_data())
 
-        cv.imshow(WINDOW_DEPTH_LEFT, left_depth_color)
-        cv.imshow(WINDOW_DEPTH_RIGHT, right_depth_color)
+        cv.imshow(WINDOW_LEFT, left_ir)
+        cv.imshow(WINDOW_RIGHT, right_ir)
 
         key = cv.pollKey()
         if key == 27:  # ESCAPE
