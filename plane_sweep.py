@@ -53,6 +53,10 @@ def main(args):
     cv.imshow(WINDOW_LEFT_IR_1, left_ir_1)
     cv.imshow(WINDOW_RIGHT_IR_2, right_ir_2)
 
+    # this works as well, but we need to use the inverse, i.e. instead of p1=H*p0 we have p0=H.I*p1
+    # setting the flag WARP_INVERSE_MAP to directly use the specified homography
+    warped_right = cv.warpPerspective(right_ir_2, H2, (1280, 720), flags=cv.WARP_INVERSE_MAP | cv.INTER_LINEAR)
+
     MOUSE_X, MOUSE_Y = 0, 0
 
     def on_mouse(event, x, y, flags, user_data):
@@ -65,12 +69,17 @@ def main(args):
     run = True
     while run:
         p2 = (H2 @ [MOUSE_X, MOUSE_Y, 1]).reshape(-1, 3).astype(int)
-        img =  cv.copyTo(right_ir_2, None)
+        img = cv.copyTo(right_ir_2, None)
         cv.drawMarker(img, (p2[0, 0], p2[0, 1]), (1, 1, 1))
         cv.imshow(WINDOW_RIGHT_IR_2, img)
+
+        warped_right_marker = cv.copyTo(warped_right, None)
+        cv.drawMarker(warped_right_marker, (MOUSE_X, MOUSE_Y), (1, 1, 1))
+        cv.imshow(WINDOW_RIGHT_IR_1, warped_right_marker)
         key = cv.waitKey(1)
         if key == 27:  # ESCAPE
             run = False
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
