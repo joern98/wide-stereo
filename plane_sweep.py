@@ -7,6 +7,8 @@ import numpy as np
 import argparse
 import json
 
+from line_profiler_pycharm import profile
+
 from device_utility.camera_calibration import load_calibration_from_file
 
 WINDOW_LEFT_IR_1 = "left IR 1"
@@ -44,7 +46,8 @@ def get_camera_matrix_from_dict(intrinsic_dict):
 #     t = np.asmatrix(calibration_result.R_14[:3, 3:4]).reshape(1, 3)
 #     tn = t.T @ n
 #     H2 = KR @ (R - tn / d) @ KL.I
-def compute_homography(k_rt0: Tuple[np.ndarray, np.ndarray, np.ndarray], k_rt1: Tuple[np.ndarray, np.ndarray, np.ndarray],
+def compute_homography(k_rt0: Tuple[np.ndarray, np.ndarray, np.ndarray],
+                       k_rt1: Tuple[np.ndarray, np.ndarray, np.ndarray],
                        z: float) -> np.ndarray:
     n = np.asarray([0, 0, -1]).reshape(3, 1)
     K0_I = np.linalg.inv(k_rt0[0])
@@ -60,19 +63,43 @@ def compute_sad(L0, L1, u, v, window_size):
     _radius = window_size // 2
     if u - _radius < 0 or v - _radius < 0 or u + _radius >= L0.shape[0] or v + _radius >= L0.shape[1]:
         return 0
-    L0_W = L0[u - _radius : u + _radius + 1, v - _radius : v + _radius + 1]
-    L1_W = L1[u - _radius : u + _radius + 1, v - _radius : v + _radius + 1]
+    L0_W = L0[u - _radius: u + _radius + 1, v - _radius: v + _radius + 1]
+    L1_W = L1[u - _radius: u + _radius + 1, v - _radius: v + _radius + 1]
     sum = np.sum(np.abs(L0_W - L1_W))
     return sum
+
 
 def compute_ssd(L0, L1, u, v, window_size):
     _radius = window_size // 2
     if u - _radius < 0 or v - _radius < 0 or u + _radius >= L0.shape[0] or v + _radius >= L0.shape[1]:
         return 0
-    L0_W = L0[u - _radius : u + _radius + 1, v - _radius : v + _radius + 1]
-    L1_W = L1[u - _radius : u + _radius + 1, v - _radius : v + _radius + 1]
+    L0_W = L0[u - _radius: u + _radius + 1, v - _radius: v + _radius + 1]
+    L1_W = L1[u - _radius: u + _radius + 1, v - _radius: v + _radius + 1]
     sum = np.sum(np.square(L0_W - L1_W))
     return sum
+
+
+# Normalized Cross-Correlation, (Furukawa, Hernandez: Multi-View Stereo, p.23), (Szeliski: Computer Vision A&A, p. 448)
+@profile
+def compute_ncc(L0, L1, u, v, window_size=3):
+    _radius = window_size // 2
+    if u - _radius < 0 or v - _radius < 0 or u + _radius >= L0.shape[0] or v + _radius >= L0.shape[1]:
+        return 0
+    f = L0[u - _radius: u + _radius + 1, v - _radius: v + _radius + 1]
+    g = L1[u - _radius: u + _radius + 1, v - _radius: v + _radius + 1]
+
+    f_avg = np.mean(f)
+    g_avg = np.mean(g)
+    f_std = np.std(f)
+    g_std = np.std(g)
+    fg_std = f_std * g_std
+    if fg_std == 0:
+        return 0
+
+    p = np.sum((f - f_avg) * (g - g_avg))
+    ncc = p / fg_std
+    return ncc
+
 
 def plane_sweep(images: [cv.Mat | np.ndarray | cv.UMat], k_rt: [Tuple[np.ndarray, np.ndarray, np.ndarray]],
                 image_size: Sequence[int],
@@ -93,6 +120,7 @@ def plane_sweep(images: [cv.Mat | np.ndarray | cv.UMat], k_rt: [Tuple[np.ndarray
 
     for i in range(n_planes):
         z = z_min + i * z_step
+        print(f"Plane at z={z}")
         _L = [images[0]]
         for j in range(1, len(images)):
             # L[0] is not warped, projection would only scale the image
@@ -102,7 +130,7 @@ def plane_sweep(images: [cv.Mat | np.ndarray | cv.UMat], k_rt: [Tuple[np.ndarray
         for m in range(len(_L)):
             cv.imshow(f"Camera {m}", _L[m])
 
-        cv.waitKey()
+        cv.waitKey(1)
         # TODO implement with Cython
 
         L0 = _L[0]
@@ -111,14 +139,15 @@ def plane_sweep(images: [cv.Mat | np.ndarray | cv.UMat], k_rt: [Tuple[np.ndarray
             u, v = it.multi_index[0], it.multi_index[1]
             consistency_values = np.zeros(len(_L) - 1)
             for k in range(1, len(_L)):
-                s = compute_ssd(L0, _L[k], u, v, window_size=5)
-                consistency_values[k-1] = s
-            var_sad = np.var(consistency_values)
+                s = compute_ncc(L0, _L[k], u, v, window_size=3)
+                consistency_values[k - 1] = s
+            var_sad = np.sum(consistency_values)
             cost_volume[i, u, v] = var_sad
-        cv.imshow("cost_volume", cost_volume[i].astype(np.uint8))
+
+        # is this visualization maybe wrong?
+        v = np.ma.masked_less(cost_volume[i], 0)
+        cv.imshow("cost_volume", v / 255)
         cv.waitKey()
-
-
 
 
 def compute_transforms(calibration_result, camera_parameters) -> [Tuple[np.ndarray, np.ndarray, np.ndarray]]:
@@ -162,7 +191,7 @@ def main(args):
               cv.extractChannel(right_ir_2, 0)]
     transforms = compute_transforms(calibration_result, camera_parameters)
 
-    plane_sweep(images, transforms, camera_parameters["image_size"], z_min=1.43, z_max=2.6, z_step=0.1)
+    plane_sweep(images[:2], transforms[:2], camera_parameters["image_size"], z_min=1.43, z_max=2.6, z_step=0.1)
 
     return 0
     MOUSE_X, MOUSE_Y = 0, 0
