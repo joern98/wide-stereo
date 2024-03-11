@@ -10,3 +10,7 @@ ScreenCapture_*.png
 /Screenshots/
 /*.py.pclprof
 CAPTURE*/
+
+/*.pyd
+/*.c
+/build/

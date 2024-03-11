@@ -9,6 +9,8 @@ import json
 
 from line_profiler_pycharm import profile
 
+from plane_sweep_ext import compute_consistency_image
+
 from device_utility.camera_calibration import load_calibration_from_file
 
 WINDOW_LEFT_IR_1 = "left IR 1"
@@ -136,16 +138,10 @@ def plane_sweep(images: [cv.Mat | np.ndarray | cv.UMat], k_rt: [Tuple[np.ndarray
         cv.waitKey(1)
         # TODO implement with Cython
 
-        L0 = _L[0]
-        it = np.nditer(L0, flags=["multi_index"])
-        for x in it:
-            u, v = it.multi_index[0], it.multi_index[1]
-            consistency_values = np.zeros(len(_L) - 1)
-            for k in range(1, len(_L)):
-                s = compute_ncc(L0, _L[k], u, v, window_size=3)
-                consistency_values[k - 1] = s
-            cost = np.mean(consistency_values)
-            cost_volume[i, u, v] = cost
+        ref = _L[0]
+        src = np.asarray(_L[1:])
+
+        compute_consistency_image(ref, src, cost_volume[i], 3)
 
         v = np.ma.masked_less(cost_volume[i], 0)
         cv.imshow("cost_volume", v)
@@ -192,7 +188,6 @@ def main(args):
               cv.extractChannel(right_ir_1, 0),
               cv.extractChannel(right_ir_2, 0)]
     transforms = compute_transforms(calibration_result, camera_parameters)
-
     plane_sweep(images, transforms, camera_parameters["image_size"], z_min=1.43, z_max=2.6, z_step=0.1)
 
     return 0
