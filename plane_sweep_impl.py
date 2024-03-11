@@ -5,7 +5,7 @@ import cython
 # Based on https://docs.cython.org/en/latest/src/userguide/numpy_tutorial.html
 
 @cython.cfunc
-@cython.exceptvar(check=False)
+@cython.exceptval(check=False)
 @cython.boundscheck(False)  # we check bounds manually
 @cython.wraparound(False)  # we don't need wraparound (negative indices)
 def _compute_ncc(ref: cython.uchar[:, :],
