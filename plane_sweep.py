@@ -1,5 +1,7 @@
 import math
+import os
 import time
+from datetime import datetime
 from os import path
 from typing import Tuple, Sequence
 
@@ -7,13 +9,16 @@ import cv2 as cv
 import numpy as np
 import argparse
 import json
+import open3d as o3d
 
 from line_profiler_pycharm import profile
 
 # imported .pyd, ignore error
 from plane_sweep_ext import compute_consistency_image
+from scipy.interpolate import interp1d
 
 from device_utility.camera_calibration import load_calibration_from_file
+from utility import save_screenshot, save_point_cloud
 
 WINDOW_LEFT_IR_1 = "left IR 1"
 WINDOW_LEFT_IR_2 = "left IR 2"
@@ -98,7 +103,7 @@ def compute_ncc(L0, L1, u, v, window_size=3):
 
     # this is not actually the standard deviation, but leads to correct results and is given this way by Szeliski, p.448
     f_std = np.sqrt(np.sum((f - f_avg) ** 2))
-    g_std = np.sqrt(np.sum((g-g_avg)**2))
+    g_std = np.sqrt(np.sum((g - g_avg) ** 2))
     fg_std = f_std * g_std
     if fg_std == 0:
         return 0
@@ -145,13 +150,17 @@ def plane_sweep(images: [cv.Mat | np.ndarray | cv.UMat], k_rt: [Tuple[np.ndarray
         src = np.asarray(_L[1:])
 
         start = time.perf_counter_ns()
-        compute_consistency_image(ref, src, cost_volume[i], 5)
+        compute_consistency_image(ref, src, cost_volume[i], 7)
         print(f"Consistency computation took {(time.perf_counter_ns() - start) / 1000000} ms")
         v = np.ma.masked_less(cost_volume[i], 0)
         cv.imshow("cost_volume", v)
         cv.waitKey(1)
 
     # find depth
+    # np.argmax returns the index of max element across axis
+    max_idx = np.argmax(cost_volume, axis=0)
+    depth = z_min + max_idx * z_step
+    return depth
 
 
 def compute_transforms(calibration_result, camera_parameters) -> [Tuple[np.ndarray, np.ndarray, np.ndarray]]:
@@ -183,6 +192,47 @@ def compute_transforms(calibration_result, camera_parameters) -> [Tuple[np.ndarr
     return m
 
 
+OUTPUT_DIRECTORY = None
+
+
+def ensure_output_directory(root_directory):
+    global OUTPUT_DIRECTORY
+    if OUTPUT_DIRECTORY is None:
+        timestamp = datetime.now().strftime('%y%m%d_%H%M%S')
+        pathname = path.join(root_directory, f"Output_{timestamp}")
+        os.mkdir(pathname)
+        OUTPUT_DIRECTORY = pathname
+    return OUTPUT_DIRECTORY
+
+def depth_to_point_cloud(depth: np.ndarray, intrinsic, extrinsic,
+                         colormap: np.ndarray | None = None) -> o3d.geometry.PointCloud:
+    if colormap is not None:
+        depth_image = o3d.geometry.Image(depth)
+        # OpenCV is BGR, Open3D expects RGB
+        depth_colormap_image = o3d.geometry.Image(colormap)
+        depth_rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(color=depth_colormap_image,
+                                                                              depth=depth_image,
+                                                                              depth_trunc=20,
+                                                                              depth_scale=1,
+                                                                              convert_rgb_to_intensity=False)
+        pc = o3d.geometry.PointCloud.create_from_rgbd_image(depth_rgbd_image, intrinsic, extrinsic)
+    else:
+        depth_image = o3d.geometry.Image(depth)
+        pc = o3d.geometry.PointCloud.create_from_depth_image(depth_image,
+                                                             intrinsic,
+                                                             extrinsic,
+                                                             depth_scale=1,
+                                                             depth_trunc=20)
+    return pc
+
+def create_pinhole_intrinsic_from_dict(intrinsic_dict, image_size):
+    return o3d.camera.PinholeCameraIntrinsic(width=image_size[0],
+                                             height=image_size[1],
+                                             cx=intrinsic_dict["ppx"],
+                                             cy=intrinsic_dict["ppy"],
+                                             fx=intrinsic_dict["fx"],
+                                             fy=intrinsic_dict["fy"])
+
 def main(args):
     calibration_result, camera_parameters, \
         left_ir_1, left_ir_2, right_ir_1, right_ir_2, \
@@ -194,21 +244,39 @@ def main(args):
               cv.extractChannel(right_ir_1, 0),
               cv.extractChannel(right_ir_2, 0)]
     transforms = compute_transforms(calibration_result, camera_parameters)
-    plane_sweep(images, transforms, camera_parameters["image_size"], z_min=1, z_max=4.0, z_step=0.05)
+    depth = plane_sweep(images, transforms, camera_parameters["image_size"], z_min=0.5, z_max=8.0, z_step=0.025)
 
-    return 0
+    cv.destroyAllWindows()
+    m = interp1d((0, 4), (0, 255), bounds_error=False, fill_value=(0, 255))
+    depth_colored = cv.applyColorMap(m(depth).astype(np.uint8), cv.COLORMAP_JET)
+    cv.imshow("depth", depth_colored)
+
+    # This is a hack we need for Open3D to be able to create the point cloud: scale depth to mm and convert to uint16
+    depth_image = o3d.geometry.Image((depth * 1000).astype(np.uint16))
+    intrinsic = create_pinhole_intrinsic_from_dict(camera_parameters["left_intrinsics"], camera_parameters["image_size"])
+    point_cloud = o3d.geometry.PointCloud.create_from_depth_image(depth=depth_image,
+                                                                  intrinsic=intrinsic,
+                                                                  extrinsic=np.eye(4),
+                                                                  depth_scale=1000,
+                                                                  depth_trunc=20)
     MOUSE_X, MOUSE_Y = 0, 0
 
     def on_mouse(event, x, y, flags, user_data):
         nonlocal MOUSE_X, MOUSE_Y
         if event == cv.EVENT_MOUSEMOVE:
             MOUSE_X, MOUSE_Y = x, y
+            print(f"depth: {depth[MOUSE_Y, MOUSE_X]} m")
 
-    run = True
-    while run:
-        key = cv.waitKey(1)
-        if key == 27:  # ESCAPE
-            run = False
+    cv.setMouseCallback("depth", on_mouse)
+    key = cv.waitKey()
+
+    def output_dir():
+        return ensure_output_directory(args.directory)
+
+    if key == ord('s'):  # ESCAPE
+        cv.imwrite(path.join(output_dir(), "Depth_PlaneSweep.png"), depth_colored)
+        save_point_cloud(point_cloud, "PointCloud_PlaneSweep", output_directory=output_dir())
+    cv.destroyAllWindows()
 
 
 if __name__ == '__main__':

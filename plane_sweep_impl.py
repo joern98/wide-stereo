@@ -2,9 +2,6 @@ import numpy as np
 import cython
 
 
-# TODO only write the plane consistency computation in cython for now
-#  since that is the only part where we cannot use fast OpenCV or numpy implementation
-
 # Based on https://docs.cython.org/en/latest/src/userguide/numpy_tutorial.html
 
 @cython.cfunc
