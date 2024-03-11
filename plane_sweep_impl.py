@@ -1,6 +1,6 @@
 import numpy as np
 import cython
-import math
+
 
 # TODO only write the plane consistency computation in cython for now
 #  since that is the only part where we cannot use fast OpenCV or numpy implementation
@@ -15,9 +15,10 @@ def _compute_ncc(ref: cython.uchar[:, :],
                  src: cython.uchar[:, :],
                  x: cython.Py_ssize_t,
                  y: cython.Py_ssize_t,
-                 window_size: cython.int):
-
-    radius: cython.int = window_size // 2
+                 window_size: cython.uint) -> cython.float:
+    # Normalized Cross-Correlation
+    # Furukawa, Hernandez: Multi-View Stereo, p.23; Szeliski: Computer Vision A&A, p. 448
+    radius: cython.uint = window_size // 2
     if x - radius < 0 or y - radius < 0 or x + radius >= ref.shape[0] or y + radius >= ref.shape[1]:
         return 0
 
@@ -37,11 +38,10 @@ def _compute_ncc(ref: cython.uchar[:, :],
             sum_ref += ref[min_x + u, min_y + v]
             sum_src += src[min_x + u, min_y + v]
 
-    n_window = window_size * window_size
+    n_window: cython.float = window_size * window_size
     mean_ref: cython.float = sum_ref / n_window
     mean_src: cython.float = sum_src / n_window
 
-    # I could use Fast inverse square here for standard deviations
     # compute pseudo std. deviation over window
     sum_ref_1: cython.float = 0
     sum_src_1: cython.float = 0
@@ -53,21 +53,25 @@ def _compute_ncc(ref: cython.uchar[:, :],
         for v in range(d_window):
             a = ref[min_x + u, min_y + v] - mean_ref
             b = src[min_x + u, min_y + v] - mean_src
-            sum_ref_1 += a*a
-            sum_src_1 += b*b
-            sum_numerator += a*b
+            sum_ref_1 += a * a
+            sum_src_1 += b * b
+            sum_numerator += a * b
 
-    std_ref: cython.float = math.sqrt(sum_ref_1)
-    std_src: cython.float = math.sqrt(sum_src_1)
-    p = std_ref * std_src
-    if p == 0:
+    if sum_src_1 == 0 or sum_ref_1 == 0:
         return 0
-    ncc = sum_numerator / p
+
+    # Inverse sqrt is faster than first computing sqrt and then taking the inverse
+    std_ref: cython.float = sum_ref_1 ** -0.5
+    std_src: cython.float = sum_src_1 ** -0.5
+    p: cython.float = std_ref * std_src
+    ncc: cython.float = sum_numerator * p
     return ncc
 
 
 # cython memory views -> cython.uchar[:, :] (2D memoryview)
 # https://docs.cython.org/en/latest/src/userguide/numpy_tutorial.html#efficient-indexing-with-memoryviews
+@cython.boundscheck(False)
+@cython.wraparound(False)
 def compute_consistency_image(ref: cython.uchar[:, :], src: cython.uchar[:, :, :], dst: np.ndarray,
                               window_size: cython.int = 3):
     """

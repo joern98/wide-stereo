@@ -10,6 +10,7 @@ import json
 
 from line_profiler_pycharm import profile
 
+# imported .pyd, ignore error
 from plane_sweep_ext import compute_consistency_image
 
 from device_utility.camera_calibration import load_calibration_from_file
@@ -124,6 +125,7 @@ def plane_sweep(images: [cv.Mat | np.ndarray | cv.UMat], k_rt: [Tuple[np.ndarray
     n_planes = math.floor((z_max - z_min) / z_step) + 1
     cost_volume = np.zeros((n_planes, image_size[1], image_size[0]), dtype=np.float32)
 
+    # Fill cost volume
     for i in range(n_planes):
         z = z_min + i * z_step
         print(f"Plane at z={z}")
@@ -148,6 +150,8 @@ def plane_sweep(images: [cv.Mat | np.ndarray | cv.UMat], k_rt: [Tuple[np.ndarray
         v = np.ma.masked_less(cost_volume[i], 0)
         cv.imshow("cost_volume", v)
         cv.waitKey(1)
+
+    # find depth
 
 
 def compute_transforms(calibration_result, camera_parameters) -> [Tuple[np.ndarray, np.ndarray, np.ndarray]]:
@@ -190,7 +194,7 @@ def main(args):
               cv.extractChannel(right_ir_1, 0),
               cv.extractChannel(right_ir_2, 0)]
     transforms = compute_transforms(calibration_result, camera_parameters)
-    plane_sweep(images, transforms, camera_parameters["image_size"], z_min=1.0, z_max=4.0, z_step=0.05)
+    plane_sweep(images, transforms, camera_parameters["image_size"], z_min=1, z_max=4.0, z_step=0.05)
 
     return 0
     MOUSE_X, MOUSE_Y = 0, 0
