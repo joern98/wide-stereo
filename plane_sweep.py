@@ -90,8 +90,11 @@ def compute_ncc(L0, L1, u, v, window_size=3):
 
     f_avg = np.mean(f)
     g_avg = np.mean(g)
-    f_std = np.std(f)
-    g_std = np.std(g)
+    n = window_size * window_size
+
+    # this is not actually the standard deviation, but leads to correct results and is given this way by Szeliski, p.448
+    f_std = np.sqrt(np.sum((f - f_avg) ** 2))
+    g_std = np.sqrt(np.sum((g-g_avg)**2))
     fg_std = f_std * g_std
     if fg_std == 0:
         return 0
@@ -107,8 +110,8 @@ def plane_sweep(images: [cv.Mat | np.ndarray | cv.UMat], k_rt: [Tuple[np.ndarray
     """
     Perform the basic plane sweeping algorithm
 
-    :param images:
-    :param k_rt: (K, R, t)
+    :param images: Array of images
+    :param k_rt: Array of Tuples (K, R, t)
     :param image_size:
     :param z_min:
     :param z_max:
@@ -141,12 +144,11 @@ def plane_sweep(images: [cv.Mat | np.ndarray | cv.UMat], k_rt: [Tuple[np.ndarray
             for k in range(1, len(_L)):
                 s = compute_ncc(L0, _L[k], u, v, window_size=3)
                 consistency_values[k - 1] = s
-            var_sad = np.sum(consistency_values)
-            cost_volume[i, u, v] = var_sad
+            cost = np.mean(consistency_values)
+            cost_volume[i, u, v] = cost
 
-        # is this visualization maybe wrong?
         v = np.ma.masked_less(cost_volume[i], 0)
-        cv.imshow("cost_volume", v / 255)
+        cv.imshow("cost_volume", v)
         cv.waitKey()
 
 
@@ -191,7 +193,7 @@ def main(args):
               cv.extractChannel(right_ir_2, 0)]
     transforms = compute_transforms(calibration_result, camera_parameters)
 
-    plane_sweep(images[:2], transforms[:2], camera_parameters["image_size"], z_min=1.43, z_max=2.6, z_step=0.1)
+    plane_sweep(images, transforms, camera_parameters["image_size"], z_min=1.43, z_max=2.6, z_step=0.1)
 
     return 0
     MOUSE_X, MOUSE_Y = 0, 0
