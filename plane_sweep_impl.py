@@ -5,17 +5,18 @@ import math
 # TODO only write the plane consistency computation in cython for now
 #  since that is the only part where we cannot use fast OpenCV or numpy implementation
 
-# both uint8 and float32 are compatible with C
-# https://numpy.org/doc/stable/reference/arrays.scalars.html#numpy.uint8
-SRC_DTYPE = np.uint8
-DST_DTYPE = np.float32
-
+# Based on https://docs.cython.org/en/latest/src/userguide/numpy_tutorial.html
 
 @cython.cfunc
 @cython.exceptvar(check=False)
 @cython.boundscheck(False)  # we check bounds manually
 @cython.wraparound(False)  # we don't need wraparound (negative indices)
-def _compute_ncc(ref: np.ndarray, src: np.ndarray, x: cython.Py_ssize_t, y: cython.Py_ssize_t, window_size: cython.int):
+def _compute_ncc(ref: cython.uchar[:, :],
+                 src: cython.uchar[:, :],
+                 x: cython.Py_ssize_t,
+                 y: cython.Py_ssize_t,
+                 window_size: cython.int):
+
     radius: cython.int = window_size // 2
     if x - radius < 0 or y - radius < 0 or x + radius >= ref.shape[0] or y + radius >= ref.shape[1]:
         return 0
@@ -65,9 +66,9 @@ def _compute_ncc(ref: np.ndarray, src: np.ndarray, x: cython.Py_ssize_t, y: cyth
     return ncc
 
 
-# TODO memoryviews
-# TODO cfunc for the main part
-def compute_consistency_image(ref: np.ndarray, src: np.ndarray, dst: np.ndarray,
+# cython memory views -> cython.uchar[:, :] (2D memoryview)
+# https://docs.cython.org/en/latest/src/userguide/numpy_tutorial.html#efficient-indexing-with-memoryviews
+def compute_consistency_image(ref: cython.uchar[:, :], src: cython.uchar[:, :, :], dst: np.ndarray,
                               window_size: cython.int = 3):
     """
     Compute Consistency of reference image with n source images using normalized cross-correlation
@@ -78,16 +79,17 @@ def compute_consistency_image(ref: np.ndarray, src: np.ndarray, dst: np.ndarray,
     :param window_size: search window size, has to be an odd number > 1, default 3
     :return: dst
     """
-    assert ref.shape == src.shape[1:]
-    assert dst.shape == ref.shape
-    assert ref.dtype == SRC_DTYPE
-    assert src.dtype == SRC_DTYPE
-    assert dst.dtype == DST_DTYPE
 
-    # analogous to width, height
+    # since shape is now a simple C-Array, we can no longer do ref.shape == src.shape[1:]
+    assert ref.shape[0] == src.shape[1] == dst.shape[0]
+    assert ref.shape[1] == src.shape[2] == dst.shape[1]
+
+    # image width, height
     x_max: cython.Py_ssize_t = ref.shape[0]
     y_max: cython.Py_ssize_t = ref.shape[1]
     n_src: cython.Py_ssize_t = src.shape[0]
+
+    dst_view: cython.float[:, :] = dst
 
     x: cython.Py_ssize_t
     y: cython.Py_ssize_t
@@ -99,5 +101,5 @@ def compute_consistency_image(ref: np.ndarray, src: np.ndarray, dst: np.ndarray,
             for k in range(n_src):
                 c = c + _compute_ncc(ref, src[k], x, y, window_size)
             c /= n_src  # mean of computed NCC values
-            dst[x, y] = c
+            dst_view[x, y] = c
     return dst

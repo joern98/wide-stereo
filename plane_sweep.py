@@ -1,4 +1,5 @@
 import math
+import time
 from os import path
 from typing import Tuple, Sequence
 
@@ -141,11 +142,12 @@ def plane_sweep(images: [cv.Mat | np.ndarray | cv.UMat], k_rt: [Tuple[np.ndarray
         ref = _L[0]
         src = np.asarray(_L[1:])
 
-        compute_consistency_image(ref, src, cost_volume[i], 3)
-
+        start = time.perf_counter_ns()
+        compute_consistency_image(ref, src, cost_volume[i], 5)
+        print(f"Consistency computation took {(time.perf_counter_ns() - start) / 1000000} ms")
         v = np.ma.masked_less(cost_volume[i], 0)
         cv.imshow("cost_volume", v)
-        cv.waitKey()
+        cv.waitKey(1)
 
 
 def compute_transforms(calibration_result, camera_parameters) -> [Tuple[np.ndarray, np.ndarray, np.ndarray]]:
@@ -188,7 +190,7 @@ def main(args):
               cv.extractChannel(right_ir_1, 0),
               cv.extractChannel(right_ir_2, 0)]
     transforms = compute_transforms(calibration_result, camera_parameters)
-    plane_sweep(images, transforms, camera_parameters["image_size"], z_min=1.43, z_max=2.6, z_step=0.1)
+    plane_sweep(images, transforms, camera_parameters["image_size"], z_min=1.0, z_max=4.0, z_step=0.05)
 
     return 0
     MOUSE_X, MOUSE_Y = 0, 0
