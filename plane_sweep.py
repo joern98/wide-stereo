@@ -89,7 +89,6 @@ def compute_ssd(L0, L1, u, v, window_size):
 
 
 # Normalized Cross-Correlation, (Furukawa, Hernandez: Multi-View Stereo, p.23), (Szeliski: Computer Vision A&A, p. 448)
-@profile
 def compute_ncc(L0, L1, u, v, window_size=3):
     _radius = window_size // 2
     if u - _radius < 0 or v - _radius < 0 or u + _radius >= L0.shape[0] or v + _radius >= L0.shape[1]:
@@ -140,10 +139,10 @@ def plane_sweep(images: [cv.Mat | np.ndarray | cv.UMat], k_rt: [Tuple[np.ndarray
             H = compute_homography(k_rt[0], k_rt[j], z)
             projected = cv.warpPerspective(images[j], H, image_size, flags=cv.WARP_INVERSE_MAP | cv.INTER_LINEAR)
             _L.append(projected)
-        for m in range(len(_L)):
-            cv.imshow(f"Camera {m}", _L[m])
+        # for m in range(len(_L)):
+        #     cv.imshow(f"Camera {m}", _L[m])
 
-        cv.waitKey(1)
+        # cv.waitKey(1)
         # TODO implement with Cython
 
         ref = _L[0]
@@ -152,14 +151,25 @@ def plane_sweep(images: [cv.Mat | np.ndarray | cv.UMat], k_rt: [Tuple[np.ndarray
         start = time.perf_counter_ns()
         compute_consistency_image(ref, src, cost_volume[i], 7)
         print(f"Consistency computation took {(time.perf_counter_ns() - start) / 1000000} ms")
-        v = np.ma.masked_less(cost_volume[i], 0)
-        cv.imshow("cost_volume", v)
-        cv.waitKey(1)
+        # v = (cost_volume[i] + 1.0) / 2
+        # cv.imshow("cost_volume", v)
+        # cv.waitKey(1)
 
     # find depth
     # np.argmax returns the index of max element across axis
     max_idx = np.argmax(cost_volume, axis=0)
     depth = z_min + max_idx * z_step
+
+    # Uniqueness Ratio to reduce noise
+    # for this to work properly, I would need to analyze all planes and see, how unique the maximum is over the whole domain
+    # in the current form it also filters out areas where a valid depth would be found (room wall) but the maximum is not "sharp"
+    # sorted_idx = np.argsort(cost_volume, axis=0)
+    # sorted_cost = np.take_along_axis(cost_volume, sorted_idx, axis=0)
+    # cost_ratio = np.abs(np.divide(sorted_cost[-2], sorted_cost[-1]))
+    # max_ratio = 1 - 0.005
+    # cost_ratio_threshold = np.where(cost_ratio < max_ratio, cost_ratio, -1)
+    # depth = np.where(cost_ratio_threshold != -1, z_min + sorted_idx[-1] * z_step, 0)
+
     return depth
 
 
@@ -204,6 +214,7 @@ def ensure_output_directory(root_directory):
         OUTPUT_DIRECTORY = pathname
     return OUTPUT_DIRECTORY
 
+
 def depth_to_point_cloud(depth: np.ndarray, intrinsic, extrinsic,
                          colormap: np.ndarray | None = None) -> o3d.geometry.PointCloud:
     if colormap is not None:
@@ -225,6 +236,7 @@ def depth_to_point_cloud(depth: np.ndarray, intrinsic, extrinsic,
                                                              depth_trunc=20)
     return pc
 
+
 def create_pinhole_intrinsic_from_dict(intrinsic_dict, image_size):
     return o3d.camera.PinholeCameraIntrinsic(width=image_size[0],
                                              height=image_size[1],
@@ -232,6 +244,7 @@ def create_pinhole_intrinsic_from_dict(intrinsic_dict, image_size):
                                              cy=intrinsic_dict["ppy"],
                                              fx=intrinsic_dict["fx"],
                                              fy=intrinsic_dict["fy"])
+
 
 def main(args):
     calibration_result, camera_parameters, \
@@ -244,16 +257,18 @@ def main(args):
               cv.extractChannel(right_ir_1, 0),
               cv.extractChannel(right_ir_2, 0)]
     transforms = compute_transforms(calibration_result, camera_parameters)
-    depth = plane_sweep(images, transforms, camera_parameters["image_size"], z_min=0.5, z_max=8.0, z_step=0.025)
+    depth = plane_sweep(images, transforms, camera_parameters["image_size"], z_min=0.5, z_max=4.0, z_step=0.025)
+    # depth = plane_sweep(images[::3], transforms[::3], camera_parameters["image_size"], z_min=0.5, z_max=4.0, z_step=0.1)  # only use outer cameras
 
     cv.destroyAllWindows()
-    m = interp1d((0, 4), (0, 255), bounds_error=False, fill_value=(0, 255))
+    m = interp1d((0, 8), (0, 255), bounds_error=False, fill_value=(0, 255))
     depth_colored = cv.applyColorMap(m(depth).astype(np.uint8), cv.COLORMAP_JET)
     cv.imshow("depth", depth_colored)
 
     # This is a hack we need for Open3D to be able to create the point cloud: scale depth to mm and convert to uint16
     depth_image = o3d.geometry.Image((depth * 1000).astype(np.uint16))
-    intrinsic = create_pinhole_intrinsic_from_dict(camera_parameters["left_intrinsics"], camera_parameters["image_size"])
+    intrinsic = create_pinhole_intrinsic_from_dict(camera_parameters["left_intrinsics"],
+                                                   camera_parameters["image_size"])
     point_cloud = o3d.geometry.PointCloud.create_from_depth_image(depth=depth_image,
                                                                   intrinsic=intrinsic,
                                                                   extrinsic=np.eye(4),
