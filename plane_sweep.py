@@ -114,10 +114,14 @@ def compute_ncc(L0, L1, u, v, window_size=3):
 
 def plane_sweep(images: [cv.Mat | np.ndarray | cv.UMat], k_rt: [Tuple[np.ndarray, np.ndarray, np.ndarray]],
                 image_size: Sequence[int],
-                z_min: float, z_max: float, z_step: float):
+                z_min: float, z_max: float, z_step: float,
+                out_directory=None,
+                cost_volume=None):
     """
     Perform the basic plane sweeping algorithm
 
+    :param cost_volume:
+    :param out_directory:
     :param images: Array of images
     :param k_rt: Array of Tuples (K, R, t)
     :param image_size:
@@ -126,39 +130,50 @@ def plane_sweep(images: [cv.Mat | np.ndarray | cv.UMat], k_rt: [Tuple[np.ndarray
     :param z_step:
     :return:
     """
-    n_planes = math.floor((z_max - z_min) / z_step) + 1
-    cost_volume = np.zeros((n_planes, image_size[1], image_size[0]), dtype=np.float32)
 
-    # Fill cost volume
-    for i in range(n_planes):
-        z = z_min + i * z_step
-        print(f"Plane at z={z}")
-        _L = [images[0]]
-        for j in range(1, len(images)):
-            # L[0] is not warped, projection would only scale the image
-            H = compute_homography(k_rt[0], k_rt[j], z)
-            projected = cv.warpPerspective(images[j], H, image_size, flags=cv.WARP_INVERSE_MAP | cv.INTER_LINEAR)
-            _L.append(projected)
-        # for m in range(len(_L)):
-        #     cv.imshow(f"Camera {m}", _L[m])
+    if cost_volume is None:
+        n_planes = math.floor((z_max - z_min) / z_step) + 1
+        cost_volume = np.zeros((n_planes, image_size[1], image_size[0]), dtype=np.float32)
 
-        # cv.waitKey(1)
-        # TODO implement with Cython
+        # Fill cost volume
+        for i in range(n_planes):
+            z = z_min + i * z_step
+            print(f"Plane at z={z}")
+            _L = [images[0]]
+            for j in range(1, len(images)):
+                # L[0] is not warped, projection would only scale the image
+                H = compute_homography(k_rt[0], k_rt[j], z)
+                projected = cv.warpPerspective(images[j], H, image_size, flags=cv.WARP_INVERSE_MAP | cv.INTER_LINEAR)
+                _L.append(projected)
+            # for m in range(len(_L)):
+            #     cv.imshow(f"Camera {m}", _L[m])
+            #
+            # cv.waitKey(1)
 
-        ref = _L[0]
-        src = np.asarray(_L[1:])
+            ref = _L[0]
+            src = np.asarray(_L[1:])
 
-        start = time.perf_counter_ns()
-        compute_consistency_image(ref, src, cost_volume[i], 7)
-        print(f"Consistency computation took {(time.perf_counter_ns() - start) / 1000000} ms")
-        # v = (cost_volume[i] + 1.0) / 2
-        # cv.imshow("cost_volume", v)
-        # cv.waitKey(1)
+            # start = time.perf_counter_ns()
+            compute_consistency_image(ref, src, cost_volume[i], 7)
+            # print(f"Consistency computation took {(time.perf_counter_ns() - start) / 1000000} ms")
+            # v = (cost_volume[i] + 1.0) / 2
+            # cv.imshow("cost_volume", v)
+            # cv.waitKey(1)
+
+        save_cost_volume = input(f"Save cost-volume? (Estimated size: {cost_volume.nbytes / 1024} kb) (y/n): ") == 'y'
+        if save_cost_volume and out_directory is not None:
+            np.save(path.join(out_directory, f"cost_volume_n{n_planes}.npy"), cost_volume)
+
+    else:
+        cost_volume = np.load(cost_volume)
 
     # find depth
     # np.argmax returns the index of max element across axis
     max_idx = np.argmax(cost_volume, axis=0)
     depth = z_min + max_idx * z_step
+    m = np.squeeze(np.take_along_axis(cost_volume, max_idx.reshape(1, 720, 1280), axis=0))
+    depth = np.where(m > 0.7, depth, 0)
+
 
     # Uniqueness Ratio to reduce noise
     # for this to work properly, I would need to analyze all planes and see, how unique the maximum is over the whole domain
@@ -251,17 +266,21 @@ def main(args):
         left_ir_1, left_ir_2, right_ir_1, right_ir_2, \
         left_native_depth, right_native_depth = load_data(args.directory)
 
+    def output_dir():
+        return ensure_output_directory(args.directory)
+
     # why are these greyscale images 3-channel? extract the first channel to save memory for plane sweep
     images = [cv.extractChannel(left_ir_1, 0),
               cv.extractChannel(left_ir_2, 0),
               cv.extractChannel(right_ir_1, 0),
               cv.extractChannel(right_ir_2, 0)]
     transforms = compute_transforms(calibration_result, camera_parameters)
-    depth = plane_sweep(images, transforms, camera_parameters["image_size"], z_min=0.5, z_max=4.0, z_step=0.025)
+    depth = plane_sweep(images, transforms, camera_parameters["image_size"], z_min=1.0, z_max=6.0, z_step=0.05,
+                        out_directory=output_dir(), cost_volume=args.cost_volume)
     # depth = plane_sweep(images[::3], transforms[::3], camera_parameters["image_size"], z_min=0.5, z_max=4.0, z_step=0.1)  # only use outer cameras
 
     cv.destroyAllWindows()
-    m = interp1d((0, 8), (0, 255), bounds_error=False, fill_value=(0, 255))
+    m = interp1d((0, 16), (0, 255), bounds_error=False, fill_value=(0, 255))
     depth_colored = cv.applyColorMap(m(depth).astype(np.uint8), cv.COLORMAP_JET)
     cv.imshow("depth", depth_colored)
 
@@ -285,10 +304,9 @@ def main(args):
     cv.setMouseCallback("depth", on_mouse)
     key = cv.waitKey()
 
-    def output_dir():
-        return ensure_output_directory(args.directory)
 
-    if key == ord('s'):  # ESCAPE
+    print("press 's' to save output")
+    if key == ord('s'):
         cv.imwrite(path.join(output_dir(), "Depth_PlaneSweep.png"), depth_colored)
         save_point_cloud(point_cloud, "PointCloud_PlaneSweep", output_directory=output_dir())
     cv.destroyAllWindows()
@@ -297,5 +315,6 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("directory", help="Path to the directory created by capture.py")
+    parser.add_argument("--cost_volume", help="Path to cost-volume .npy file")
     args = parser.parse_args()
     main(args)
