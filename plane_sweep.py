@@ -112,6 +112,7 @@ def compute_ncc(L0, L1, u, v, window_size=3):
     return ncc
 
 
+@profile
 def plane_sweep(images: [cv.Mat | np.ndarray | cv.UMat], k_rt: [Tuple[np.ndarray, np.ndarray, np.ndarray]],
                 image_size: Sequence[int],
                 z_min: float, z_max: float, z_step: float,
@@ -172,7 +173,7 @@ def plane_sweep(images: [cv.Mat | np.ndarray | cv.UMat], k_rt: [Tuple[np.ndarray
     max_idx = np.argmax(cost_volume, axis=0)
     depth = z_min + max_idx * z_step
     m = np.squeeze(np.take_along_axis(cost_volume, max_idx.reshape(1, 720, 1280), axis=0))
-    depth = np.where(m > 0.7, depth, 0)
+    depth = np.where(m > 0.6, depth, 0)
 
 
     # Uniqueness Ratio to reduce noise
@@ -224,7 +225,7 @@ def ensure_output_directory(root_directory):
     global OUTPUT_DIRECTORY
     if OUTPUT_DIRECTORY is None:
         timestamp = datetime.now().strftime('%y%m%d_%H%M%S')
-        pathname = path.join(root_directory, f"Output_{timestamp}")
+        pathname = path.join(root_directory, f"Output_{timestamp}_plane_sweep")
         os.mkdir(pathname)
         OUTPUT_DIRECTORY = pathname
     return OUTPUT_DIRECTORY
@@ -275,7 +276,7 @@ def main(args):
               cv.extractChannel(right_ir_1, 0),
               cv.extractChannel(right_ir_2, 0)]
     transforms = compute_transforms(calibration_result, camera_parameters)
-    depth = plane_sweep(images, transforms, camera_parameters["image_size"], z_min=1.0, z_max=6.0, z_step=0.05,
+    depth = plane_sweep(images, transforms, camera_parameters["image_size"], z_min=0.5, z_max=4.0, z_step=0.02,
                         out_directory=output_dir(), cost_volume=args.cost_volume)
     # depth = plane_sweep(images[::3], transforms[::3], camera_parameters["image_size"], z_min=0.5, z_max=4.0, z_step=0.1)  # only use outer cameras
 
@@ -302,10 +303,9 @@ def main(args):
             print(f"depth: {depth[MOUSE_Y, MOUSE_X]} m")
 
     cv.setMouseCallback("depth", on_mouse)
+    print("press 's' to save output")
     key = cv.waitKey()
 
-
-    print("press 's' to save output")
     if key == ord('s'):
         cv.imwrite(path.join(output_dir(), "Depth_PlaneSweep.png"), depth_colored)
         save_point_cloud(point_cloud, "PointCloud_PlaneSweep", output_directory=output_dir())

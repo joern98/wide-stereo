@@ -1,5 +1,6 @@
 import argparse
 import json
+import math
 import os.path
 import os.path as path
 from datetime import datetime
@@ -19,7 +20,7 @@ WINDOW_RIGHT_IR_2 = "right IR 2"
 WINDOW_DEPTH_LEFT = "left depth"
 WINDOW_DEPTH_WIDE = "wide depth"
 
-MAP_DEPTH_M_TO_BYTE = interp1d([0, 10], [0, 255], bounds_error=False, fill_value=(0, 255))
+MAP_DEPTH_M_TO_BYTE = interp1d([0, 16], [0, 255], bounds_error=False, fill_value=(0, 255))
 
 KEY_ESCAPE = 256
 KEY_SPACE = 32
@@ -93,10 +94,106 @@ def ensure_output_directory(root_directory):
     global OUTPUT_DIRECTORY
     if OUTPUT_DIRECTORY is None:
         timestamp = datetime.now().strftime('%y%m%d_%H%M%S')
-        pathname = path.join(root_directory, f"Output_{timestamp}")
+        pathname = path.join(root_directory, f"Output_{timestamp}_mbs_pointcloud")
         os.mkdir(pathname)
         OUTPUT_DIRECTORY = pathname
     return OUTPUT_DIRECTORY
+
+
+def double_stereo(ir_0, ir_1, ir_2, ir_3, calibration_result, camera_parameters,
+                  z_near=0.5, z_far=10.0, error_threshold=0.02):
+    # narrow stereo
+    DISPARITY_ERROR = 0.5
+    f = camera_parameters["left_intrinsics"]["fx"]
+    b = abs(camera_parameters["left_stereo_extrinsics"]["t"][0])
+    bf = b * f
+    z_where_error_too_big = math.sqrt(bf * error_threshold / DISPARITY_ERROR)
+    d_min = int(bf / z_where_error_too_big)  # minimum disparity
+    d_max = int(bf / z_near)  # maximum disparity from where wide stereo is used
+    num_disp = 16 * ((d_max - d_min) // 16 + 1)  # num disparities rounded up to the next multiple of 16
+    print(
+        f"Computing narrow stereo with d_min: {d_min}, d_max: {d_max} and num_disp: {num_disp} for threshold depth z: {z_where_error_too_big},"
+        f"min z: {bf / d_max}, max z: {bf / d_min}")
+    stereo95 = cv.StereoSGBM.create(
+        minDisparity=d_min,
+        numDisparities=num_disp,
+        blockSize=3,
+        P1=100,
+        P2=400,
+        disp12MaxDiff=4,
+        preFilterCap=1,
+        uniquenessRatio=5,
+        speckleWindowSize=174,
+        speckleRange=1,
+        mode=cv.STEREO_SGBM_MODE_HH
+    )
+
+    # compute stereo left device
+    disparity_narrow = stereo95.compute(ir_0, ir_1).astype(np.float32) / 16.0
+    depth_narrow = bf / disparity_narrow
+
+    # remove plane at z_max result from constraining disparity
+    max_depth_value = np.max(depth_narrow)
+    depth_narrow = np.where(depth_narrow == max_depth_value, 0, depth_narrow)
+
+    pinhole_intrinsics = create_pinhole_intrinsic_from_dict(camera_parameters["left_intrinsics"],
+                                                            camera_parameters["image_size"])
+    narrow_point_cloud = depth_to_point_cloud(depth_narrow, pinhole_intrinsics, np.eye(4))
+
+    # wide stereo
+    rectification = stereo_rectify(image_size=camera_parameters["image_size"], calib=calibration_result)
+    f = rectification.P_left[0, 0]  # focal length of the rectified images
+    b = abs(calibration_result.R_14[0, 3])
+    bf = b * f
+    d_min = int(bf / z_far)
+    d_max = int(bf / z_where_error_too_big)
+    num_disp = 16 * ((d_max - d_min) // 16 + 1)
+    print(
+        f"Computing wide stereo with d_min: {d_min}, d_max: {d_max} and num_disp: {num_disp} for threshold depth z: {z_where_error_too_big},"
+        f"min z: {bf / d_max}, max z: {bf / d_min}")
+    stereo285 = cv.StereoSGBM.create(
+        minDisparity=d_min,
+        numDisparities=num_disp,
+        blockSize=3,
+        P1=100,
+        P2=400,
+        disp12MaxDiff=4,
+        preFilterCap=1,
+        uniquenessRatio=5,
+        speckleWindowSize=128,
+        speckleRange=1,
+        mode=cv.STEREO_SGBM_MODE_HH
+    )
+
+    # compute stereo wide
+    # rectify first
+    left_rectified = cv.remap(ir_0,
+                              rectification.left_map_x,
+                              rectification.left_map_y,
+                              interpolation=cv.INTER_LANCZOS4,
+                              borderMode=cv.BORDER_CONSTANT,
+                              borderValue=(0, 0, 0))
+    right_rectified = cv.remap(ir_3,
+                               rectification.right_map_x,
+                               rectification.right_map_y,
+                               interpolation=cv.INTER_LANCZOS4,
+                               borderMode=cv.BORDER_CONSTANT,
+                               borderValue=(0, 0, 0))
+    wide_disparity_raw = stereo285.compute(left_rectified, right_rectified)
+    wide_disparity = wide_disparity_raw.astype(np.float32) / 16.0
+    points285 = cv.reprojectImageTo3D(wide_disparity, rectification.Q, handleMissingValues=True)
+    points285_flat = points285.reshape(-1, 3)
+    # find indices where reprojectImageTo3D() has set Z to 10000 to mark invalid point
+    invalid_indices = np.nonzero(points285_flat[:, 2:3] == 10000)
+    points285_valid_only = np.delete(points285_flat, invalid_indices[0], 0)
+    wide_point_cloud = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(points285_valid_only.reshape(-1, 3)))
+    depth_wide = points285[:, :, 2:3]
+
+    # combine point clouds
+    combined_point_cloud = o3d.geometry.PointCloud(narrow_point_cloud)
+    combined_point_cloud.points.extend(wide_point_cloud.points)
+
+    return combined_point_cloud, narrow_point_cloud, wide_point_cloud, depth_narrow, depth_wide
 
 
 def main(args):
@@ -110,75 +207,26 @@ def main(args):
     cv.imshow(WINDOW_RIGHT_IR_1, right_ir_1)
     cv.imshow(WINDOW_RIGHT_IR_2, right_ir_2)
 
-    stereo95 = cv.StereoSGBM.create(
-        minDisparity=1,
-        numDisparities=16 * 4,
-        blockSize=3,
-        P1=100,
-        P2=400,
-        disp12MaxDiff=4,
-        preFilterCap=1,
-        uniquenessRatio=5,
-        speckleWindowSize=64,
-        speckleRange=1,
-        mode=cv.STEREO_SGBM_MODE_SGBM
-    )
+    combined_pointcloud, narrow_pointcloud, wide_pointcloud, narrow_depth, wide_depth = double_stereo(left_ir_1,
+                                                                                                      left_ir_2,
+                                                                                                      right_ir_1,
+                                                                                                      right_ir_2,
+                                                                                                      calibration_result,
+                                                                                                      camera_parameters,
+                                                                                                      z_near=0.5,
+                                                                                                      z_far=16.0,
+                                                                                                      error_threshold=0.03)
 
-    # compute stereo left device
-    disp95 = stereo95.compute(left_ir_1, left_ir_2).astype(np.float32) / 16.0
-    b95 = abs(camera_parameters["left_stereo_extrinsics"]["t"][0])
-    f95 = camera_parameters["left_intrinsics"]["fx"]
-    bf95 = b95 * f95
-    depth95 = bf95 / disp95
+    depth_narrow_colorized = cv.applyColorMap(MAP_DEPTH_M_TO_BYTE(narrow_depth).astype(np.uint8), cv.COLORMAP_JET)
+    cv.imshow(WINDOW_DEPTH_LEFT, depth_narrow_colorized)
 
-    depth95_color = cv.applyColorMap(MAP_DEPTH_M_TO_BYTE(depth95).astype(np.uint8), cv.COLORMAP_JET)
-    cv.imshow(WINDOW_DEPTH_LEFT, depth95_color)
-
-    stereo285 = cv.StereoSGBM.create(
-        minDisparity=1,
-        numDisparities=16 * 8,
-        blockSize=3,
-        P1=100,
-        P2=400,
-        disp12MaxDiff=4,
-        preFilterCap=1,
-        uniquenessRatio=5,
-        speckleWindowSize=64,
-        speckleRange=1,
-        mode=cv.STEREO_SGBM_MODE_HH
-    )
-
-    # compute stereo wide
-    # rectify first
-    rectification = stereo_rectify(image_size=camera_parameters["image_size"], calib=calibration_result)
-    left_rectified = cv.remap(left_ir_1,
-                              rectification.left_map_x,
-                              rectification.left_map_y,
-                              interpolation=cv.INTER_LANCZOS4,
-                              borderMode=cv.BORDER_CONSTANT,
-                              borderValue=(0, 0, 0))
-    right_rectified = cv.remap(right_ir_2,
-                               rectification.right_map_x,
-                               rectification.right_map_y,
-                               interpolation=cv.INTER_LANCZOS4,
-                               borderMode=cv.BORDER_CONSTANT,
-                               borderValue=(0, 0, 0))
-    disp285 = stereo285.compute(left_rectified, right_rectified).astype(np.float32) / 16.0
-    points285 = cv.reprojectImageTo3D(disp285, rectification.Q, handleMissingValues=True)
-    depth285_color = cv.applyColorMap(
-        MAP_DEPTH_M_TO_BYTE(points285).astype(np.uint8)[:, :, 2:3],
-        cv.COLORMAP_JET)
-    cv.imshow(WINDOW_DEPTH_WIDE, depth285_color)
-
-    points285_flat = points285.reshape(-1, 3)
-    invalid_indices = np.nonzero(points285_flat[:,
-                                 2:3] == 10000)  # find indices where reprojectImageTo3D() has set Z to 10000 to mark invalid point
-    points285_valid_only = np.delete(points285_flat, invalid_indices[0], 0)
+    depth_wide_colorized = cv.applyColorMap(MAP_DEPTH_M_TO_BYTE(wide_depth).astype(np.uint8), cv.COLORMAP_JET)
+    cv.imshow(WINDOW_DEPTH_WIDE, depth_wide_colorized)
 
     def on_mouse(event, x, y, flags, user_data):
         if event == cv.EVENT_MOUSEMOVE:
             print(
-                f"left depth: {depth95[y, x]} m | wide depth: {points285[y, x, 2]} m | diff: {depth95[y, x] - points285[y, x, 2]} | left native "
+                f"left depth: {narrow_depth[y, x]} m | wide depth: {wide_depth[y, x]} m | diff: {narrow_depth[y, x] - wide_depth[y, x]} | left native "
                 f"depth: {left_native_depth[y, x] / 1000} m")
 
     run = True
@@ -195,25 +243,16 @@ def main(args):
     def output_dir():
         return ensure_output_directory(args.directory)
 
-    identity4 = np.eye(4)
-    pinhole_intrinsics = create_pinhole_intrinsic_from_dict(camera_parameters["left_intrinsics"],
-                                                            camera_parameters["image_size"])
-    point_cloud95 = depth_to_point_cloud(depth95, pinhole_intrinsics, identity4, depth95_color)
-    point_cloud285 = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(points285_valid_only.reshape(-1, 3)))
-    # cv.cvtColor(depth285_color, cv.COLOR_BGR2RGB,
-    #             dst=depth285_color)  # Open3D expects RGB [0, 1], OpenCV uses BGR [0, 255]
-    # point_cloud285.colors = o3d.utility.Vector3dVector(depth285_color.reshape(-1, 3) / 0xFF)
-
     while run:
         key = cv.waitKey(1)
         if key == 27:  # ESCAPE
             run = False
-        if key == ord('p'):
-            save_point_cloud(point_cloud95, "PointCloud_Left_CV", output_directory=output_dir())
-            save_point_cloud(point_cloud285, "PointCloud_Wide_CV", output_directory=output_dir())
         if key == ord('s'):
-            cv.imwrite(path.join(output_dir(), "Depth_Narrow.png"), depth95_color)
-            cv.imwrite(path.join(output_dir(), "Depth_Wide.png"), depth285_color)
+            save_point_cloud(narrow_pointcloud, "PointCloud_Left_CV", output_directory=output_dir())
+            save_point_cloud(wide_pointcloud, "PointCloud_Wide_CV", output_directory=output_dir())
+            save_point_cloud(combined_pointcloud, "PointCloud_Combined", output_directory=output_dir())
+            cv.imwrite(path.join(output_dir(), "Depth_Narrow.png"), depth_narrow_colorized)
+            cv.imwrite(path.join(output_dir(), "Depth_Wide.png"), depth_wide_colorized)
 
     cv.destroyAllWindows()
 

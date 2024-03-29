@@ -133,7 +133,7 @@ def main(args):
 
     cv.namedWindow(WINDOW_LEFT)
     cv.namedWindow(WINDOW_RIGHT)
-    cv.createTrackbar("exposure time", WINDOW_LEFT, 0, 166000, lambda v: change_exposure_time(v, device_pair))
+    cv.createTrackbar("exposure time", WINDOW_LEFT, 1, 67000, lambda v: change_exposure_time(v, device_pair))
     cv.setTrackbarPos("exposure time", WINDOW_LEFT,
                       int(get_sensor_option(device_pair.left.device.first_depth_sensor(), rs.option.exposure)))
 

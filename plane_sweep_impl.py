@@ -96,8 +96,8 @@ def compute_consistency_image(ref: cython.uchar[:, :], src: cython.uchar[:, :, :
     y: cython.Py_ssize_t
     k: cython.Py_ssize_t
     c: cython.float
-    for x in range(x_max):
-        for y in range(y_max):
+    for y in range(y_max):
+        for x in range(x_max):
             c = 0.0
             for k in range(n_src):
                 c = c + _compute_ncc(ref, src[k], x, y, window_size)
