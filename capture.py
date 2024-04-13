@@ -152,14 +152,21 @@ def main(args):
         key = cv.pollKey()
         if key == 27:  # ESCAPE
             run = False
-        if key == 115:  # s
+        if key == 115 or key == ord('q'):  # s
             timestamp = datetime.now().strftime('%y%m%d_%H%M%S')
             parent_dir = f"CAPTURE_{timestamp}"
             os.mkdir(parent_dir)
             write_images(left_frame, right_frame, parent_dir)
             write_calibration_to_file(calibration_result, os.path.join(parent_dir, "Calibration"))
             write_camera_parameters(camera_parameters, os.path.join(parent_dir, "CameraParameters"))
-
+        if key == ord('+'):
+            e = cv.getTrackbarPos("exposure time", WINDOW_LEFT)
+            change_exposure_time(e + 1, device_pair)
+            cv.setTrackbarPos("exposure time", WINDOW_LEFT, e + 1)
+        if key == ord('-'):
+            e = cv.getTrackbarPos("exposure time", WINDOW_LEFT)
+            change_exposure_time(e - 1, device_pair)
+            cv.setTrackbarPos("exposure time", WINDOW_LEFT, e - 1)
     cv.destroyAllWindows()
     device_pair.stop()
 

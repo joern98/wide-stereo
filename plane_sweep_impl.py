@@ -101,6 +101,10 @@ def compute_consistency_image(ref: cython.uchar[:, :], src: cython.uchar[:, :, :
             c = 0.0
             for k in range(n_src):
                 c = c + _compute_ncc(ref, src[k], x, y, window_size)
+            # for k in range(2):
+            #    c = c + _compute_ncc(src[0], src[k+1], x, y, window_size)
+            # c = c + _compute_ncc(src[1], src[2], x, y, window_size)
+            # c /= n_src + 3  # mean of computed NCC values
             c /= n_src  # mean of computed NCC values
             dst_view[x, y] = c
     return dst

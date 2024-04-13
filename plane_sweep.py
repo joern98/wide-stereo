@@ -137,30 +137,34 @@ def plane_sweep(images: [cv.Mat | np.ndarray | cv.UMat], k_rt: [Tuple[np.ndarray
         cost_volume = np.zeros((n_planes, image_size[1], image_size[0]), dtype=np.float32)
 
         # Fill cost volume
+        total = 0
         for i in range(n_planes):
+            start = time.perf_counter_ns()
             z = z_min + i * z_step
             print(f"Plane at z={z}")
             _L = [images[0]]
             for j in range(1, len(images)):
                 # L[0] is not warped, projection would only scale the image
                 H = compute_homography(k_rt[0], k_rt[j], z)
-                projected = cv.warpPerspective(images[j], H, image_size, flags=cv.WARP_INVERSE_MAP | cv.INTER_LINEAR)
+                projected = cv.warpPerspective(images[j], H, image_size, flags=cv.WARP_INVERSE_MAP | cv.INTER_LINEAR, borderMode=cv.BORDER_CONSTANT, borderValue=(0.5, 0.5, 0.5))
                 _L.append(projected)
-            # for m in range(len(_L)):
-            #     cv.imshow(f"Camera {m}", _L[m])
-            #
-            # cv.waitKey(1)
+            for m in range(len(_L)):
+                cv.imshow(f"Camera {m}", _L[m])
+
+            cv.waitKey(1)
 
             ref = _L[0]
             src = np.asarray(_L[1:])
 
-            # start = time.perf_counter_ns()
             compute_consistency_image(ref, src, cost_volume[i], 7)
-            # print(f"Consistency computation took {(time.perf_counter_ns() - start) / 1000000} ms")
-            # v = (cost_volume[i] + 1.0) / 2
-            # cv.imshow("cost_volume", v)
-            # cv.waitKey(1)
+            dt = time.perf_counter_ns() - start
+            total += dt
+            print(f"...Took {dt / 1000000} ms")
+            v = (cost_volume[i] + 1.0) / 2
+            cv.imshow("cost_volume", v)
+            cv.waitKey(1)
 
+        print(f"Average time per plane: {total / n_planes}")
         save_cost_volume = input(f"Save cost-volume? (Estimated size: {cost_volume.nbytes / 1024} kb) (y/n): ") == 'y'
         if save_cost_volume and out_directory is not None:
             np.save(path.join(out_directory, f"cost_volume_n{n_planes}.npy"), cost_volume)
@@ -173,7 +177,7 @@ def plane_sweep(images: [cv.Mat | np.ndarray | cv.UMat], k_rt: [Tuple[np.ndarray
     max_idx = np.argmax(cost_volume, axis=0)
     depth = z_min + max_idx * z_step
     m = np.squeeze(np.take_along_axis(cost_volume, max_idx.reshape(1, 720, 1280), axis=0))
-    depth = np.where(m > 0.6, depth, 0)
+    depth = np.where(m > 0.8, depth, 0)
 
 
     # Uniqueness Ratio to reduce noise
@@ -276,7 +280,7 @@ def main(args):
               cv.extractChannel(right_ir_1, 0),
               cv.extractChannel(right_ir_2, 0)]
     transforms = compute_transforms(calibration_result, camera_parameters)
-    depth = plane_sweep(images, transforms, camera_parameters["image_size"], z_min=0.5, z_max=4.0, z_step=0.02,
+    depth = plane_sweep(images, transforms, camera_parameters["image_size"], z_min=0.5, z_max=9.0, z_step=0.02,
                         out_directory=output_dir(), cost_volume=args.cost_volume)
     # depth = plane_sweep(images[::3], transforms[::3], camera_parameters["image_size"], z_min=0.5, z_max=4.0, z_step=0.1)  # only use outer cameras
 
